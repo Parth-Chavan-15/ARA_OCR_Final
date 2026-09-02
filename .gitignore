@@ -1,0 +1,42 @@
+﻿# Data and Training Data (populated manually by user)
+data/originals/*
+!data/originals/.gitkeep
+data/processed/*
+data/demo/*
+training_data/*
+!training_data/.gitkeep
+
+# Large Neural Network Model Weights (>100MB)
+models/**/*.safetensors
+models/**/*.bin
+models/**/*.pth
+models/**/*.pt
+*.safetensors
+*.bin
+*.pth
+*.pt
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.class
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+backend/temp_dir/
+temp_page.png
+temp_render.png
+*.log
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+
+# System and Local Environment
+.env
+.DS_Store
+Thumbs.db

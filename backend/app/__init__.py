@@ -1,0 +1,1 @@
+# ARA OCR Backend Application
