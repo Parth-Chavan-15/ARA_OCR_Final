@@ -6,25 +6,31 @@ logger = structlog.get_logger(__name__)
 class EvidenceService:
     INDICATORS = {
         "CASTE_CERTIFICATE": [
-            'caste certificate', 'जातीचा दाखला', 'form 6', 'form 7', 'form 8',
-            'tehsildar', 'sub-divisional officer', 'caste', 'sub-caste', 'tribe'
+            'caste certificate', 'जातीचा दाखला', 'जातीचे प्रमाणपत्र', 'form 6', 'form 7', 'form 8',
+            'form-6', 'form-7', 'form-8', 'tehsildar', 'tahsildar', 'sub-divisional officer',
+            'certificate to be produced by', 'produced by other backward classes', 'produced by scheduled castes'
         ],
         "CASTE_VALIDITY_CERTIFICATE": [
-            'caste validity', 'scrutiny committee', 'जात वैधता', 'validity certificate',
-            'district caste certificate committee', 'validity', 'scrutiny'
+            'certificate of validity', 'validity certificate', 'जात वैधता', 'जात वैधता प्रमाणपत्र',
+            'form 15', 'form-15', 'प्रपत्र १५', 'claim is held valid', 'claim is valid',
+            'district caste certificate scrutiny committee', 'scrutiny committee'
         ],
         "CASTE_VALIDITY_RECEIPT": [
-            'receipt', 'payment receipt', 'transaction', 'application number',
-            'receipt no', 'online payment', 'receipt no.'
+            'receipt', 'acknowledgement receipt', 'application with supporting documents receipt',
+            'receipt no', 'receipt no.', 'transaction ref', 'online submitted application'
         ],
         "PROFORMA_O": [
-            'proforma', 'proforma-o', 'mother tongue', 'linguistic minority',
-            'प्रपत्र', 'प्रपत्र-ओ'
+            'proforma-o', 'proforma -o', 'proforma o', 'proforma-0', 'proforma 0',
+            'प्रपत्र-ओ', 'प्रपत्र ओ', 'minority community student', 'self declaration for minority'
         ],
         "LEAVING_CERTIFICATE": [
-            'leaving certificate', 'school leaving', 'transfer certificate',
-            'date of birth', 'admission', 'शाळा सोडल्याचा दाखला', 'leaving',
-            'transfer', 'conduct'
+            'leaving certificate', 'school leaving', 'college leaving', 'transfer certificate',
+            'lc no', 'lc no.', 'general register', 'name of the pupil', 'शाळा सोडल्याचा दाखला'
+        ],
+        "UNKNOWN_OUT_OF_SCOPE": [
+            'non creamy layer', 'non-creamy layer', 'ncl', 'income certificate',
+            'domicile certificate', 'nationality', 'admission form', 'application form',
+            'state common entrance test cell', 'cap round', 'cap allotment'
         ]
     }
 

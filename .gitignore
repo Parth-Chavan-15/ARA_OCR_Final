@@ -1,12 +1,15 @@
-﻿# Data and Training Data (populated manually by user)
+# Data and Training Data (populated manually by user)
 data/originals/*
 !data/originals/.gitkeep
 data/processed/*
 data/demo/*
 training_data/*
 !training_data/.gitkeep
+new_training_data/
+wheels/
 
 # Large Neural Network Model Weights (>100MB)
+models/experiments/
 models/**/*.safetensors
 models/**/*.bin
 models/**/*.pth

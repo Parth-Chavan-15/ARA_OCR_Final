@@ -27,14 +27,19 @@ class Settings(BaseSettings):
     PIPELINE_VERSION: str = "0.1.0"
 
     # Classification confidence threshold (§19)
-    # Below this threshold → UNKNOWN / OUT_OF_SCOPE
+    # Below this threshold -> UNKNOWN / OUT_OF_SCOPE
     CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.55
+    CONFIDENCE_THRESHOLD: float = 0.55
 
     # File upload limits
     MAX_FILE_SIZE_MB: int = 50
 
     # CORS origins for frontend dev server
     CORS_ORIGINS: str = "http://localhost:5173"
+
+    # Hardware & GPU Acceleration
+    USE_GPU: bool = True
+    GPU_DEVICE_ID: int = 0
 
     # Logging
     LOG_LEVEL: str = "INFO"

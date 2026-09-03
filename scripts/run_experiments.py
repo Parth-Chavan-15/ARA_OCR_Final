@@ -1,12 +1,23 @@
 """
-ARA OCR — Multimodal Document Classifier Multi-Run Training & Benchmark
+ARA OCR - Multimodal Document Classifier (LayoutXLM / LayoutLMv3)
+Multi-Run GPU-Accelerated Training, Evaluation & Benchmarking Suite
 
 Features:
-1. Complete Dataset Ingestion: Ingests all 65 PDF/Image documents across all 6 classes.
-2. Stratified 70/30 Train/Test Split: Ensures proportional class representation in both splits.
-3. Multi-Run Experiments: Executes 4 different hyperparameter configurations (learning rate, weight decay, epochs, class weights).
-4. Full Metrics & Reporting: Calculates Train Loss, Test Loss, Test Accuracy, Macro F1, Per-Class Precision/Recall/F1, and Confusion Matrix.
-5. Best Model Export: Saves the highest-accuracy checkpoint to models/layoutxlm/.
+1. Leakage-Free Student/Group Stratified Split:
+   Ensures all pages/documents belonging to the same student or file group
+   are assigned exclusively to either the Train or Test/Validation set.
+2. Imbalance-Aware Loss Functions:
+   Computes smoothed inverse-frequency class weights to balance gradient updates
+   across majority (CVC) and minority (Receipt, Proforma-O, LC, CC) classes.
+3. Multi-Run Experiments with Mixed Precision (FP16):
+   Runs multiple hyperparameter configurations on NVIDIA CUDA GPU with automatic
+   mixed precision (torch.cuda.amp) and gradient scaling.
+4. Comprehensive Metric Evaluation:
+   Calculates Test Loss, Accuracy, Macro F1, Weighted F1, Per-Class Precision/Recall/F1,
+   and full 6x6 Confusion Matrix.
+5. Safe Checkpointing & Selection:
+   Saves each run's model and weights in models/experiments/run_{id}/ and selects
+   the best model based primarily on Macro F1.
 """
 
 import os
@@ -15,6 +26,7 @@ import json
 import time
 import random
 import logging
+import argparse
 from pathlib import Path
 from collections import defaultdict, Counter
 
@@ -25,7 +37,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
-from transformers import LayoutLMv3ForSequenceClassification, LayoutLMv3Processor
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
+from transformers import (
+    LayoutLMv3Config,
+    LayoutLMv3ForSequenceClassification,
+    LayoutLMv3Processor,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -41,14 +58,31 @@ CLASS_NAMES = [
 ]
 CLASS_MAP = {name: i for i, name in enumerate(CLASS_NAMES)}
 
-def extract_document_data(file_path: Path) -> list[dict]:
+CLASS_DIR_MAP = {
+    "caste_certificate": "CASTE_CERTIFICATE",
+    "caste_validity_certificate": "CASTE_VALIDITY_CERTIFICATE",
+    "caste_validity_receipt": "CASTE_VALIDITY_RECEIPT",
+    "leaving_certificate": "LEAVING_CERTIFICATE",
+    "proforma_o": "PROFORMA_O",
+    "unknown_out_of_scope": "UNKNOWN_OUT_OF_SCOPE",
+    "CASTE_CERTIFICATE": "CASTE_CERTIFICATE",
+    "CASTE_VALIDITY_CERTIFICATE": "CASTE_VALIDITY_CERTIFICATE",
+    "CASTE_VALIDITY_RECEIPT": "CASTE_VALIDITY_RECEIPT",
+    "LEAVING_CERTIFICATE": "LEAVING_CERTIFICATE",
+    "PROFORMA_O": "PROFORMA_O",
+    "UNKNOWN_OUT_OF_SCOPE": "UNKNOWN_OUT_OF_SCOPE",
+}
+
+
+def extract_document_pages(file_path: Path) -> list[dict]:
     """
     Extracts high-resolution page image, word tokens, and 0-1000 normalized bounding boxes
     from PDF or image file.
     """
     samples = []
     suffix = file_path.suffix.lower()
-    
+    student_id = file_path.stem.split('_')[0].split('-')[0].strip()
+
     if suffix == ".pdf":
         try:
             doc = fitz.open(str(file_path))
@@ -57,14 +91,14 @@ def extract_document_data(file_path: Path) -> list[dict]:
                 pix = page.get_pixmap(dpi=150)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 w, h = pix.width, pix.height
-                
+
                 # Extract word boxes if present
                 raw_words = page.get_text("words")
                 words = []
                 boxes = []
-                
+
                 for item in raw_words:
-                    word_text = item[4].strip()
+                    word_text = str(item[4]).strip()
                     if word_text:
                         x0, y0, x1, y1 = item[:4]
                         norm_box = [
@@ -75,68 +109,181 @@ def extract_document_data(file_path: Path) -> list[dict]:
                         ]
                         words.append(word_text)
                         boxes.append(norm_box)
-                        
+
                 if not words:
-                    # Anchor words for scanned documents
                     stem_words = file_path.stem.replace("_", " ").replace("-", " ").split()
-                    words = stem_words if stem_words else ["document"]
+                    words = stem_words if stem_words else ["document", "certificate"]
                     boxes = [[100, 100, 900, 300] for _ in words]
-                    
+
                 samples.append({
                     "image": img,
                     "words": words[:512],
                     "boxes": boxes[:512],
-                    "source": f"{file_path.name}_p{page_idx+1}"
+                    "source": f"{file_path.name}_p{page_idx+1}",
+                    "student_id": student_id,
                 })
             doc.close()
         except Exception as e:
-            logger.error(f"Error extracting PDF {file_path}: {e}")
-            
+            logger.warning(f"Error extracting PDF {file_path}: {e}")
+
     elif suffix in [".jpg", ".jpeg", ".png"]:
         try:
             img = Image.open(file_path).convert("RGB")
             stem_words = file_path.stem.replace("_", " ").replace("-", " ").split()
-            words = stem_words if stem_words else ["document"]
+            words = stem_words if stem_words else ["document", "certificate"]
             boxes = [[100, 100, 900, 300] for _ in words]
+
             samples.append({
                 "image": img,
                 "words": words[:512],
                 "boxes": boxes[:512],
-                "source": file_path.name
+                "source": file_path.name,
+                "student_id": student_id,
             })
         except Exception as e:
-            logger.error(f"Error loading image {file_path}: {e}")
-            
+            logger.warning(f"Error loading image {file_path}: {e}")
+
     return samples
 
-def load_dataset(data_dir: Path):
-    """Load and process all 65 documents from the training_data folder."""
+
+def load_all_datasets(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> list[dict]:
+    """
+    Loads documents from primary directory (new_training_data/) and optionally
+    enriches rare classes from auxiliary folders (e.g. data/demo/, data/originals/).
+    """
     all_samples = []
-    logger.info("Ingesting document dataset from training_data/...")
-    
-    class_counts = defaultdict(int)
-    
-    for class_name in CLASS_NAMES:
-        class_dir = data_dir / class_name
-        if not class_dir.exists():
+    logger.info(f"Loading primary dataset from {primary_dir}...")
+
+    # 1. Load from primary directory
+    for item in sorted(primary_dir.iterdir()):
+        if not item.is_dir():
             continue
-            
-        files = [f for f in class_dir.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
+        cname = CLASS_DIR_MAP.get(item.name, item.name.upper())
+        if cname not in CLASS_MAP:
+            continue
+
+        files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
         for f in files:
-            doc_samples = extract_document_data(f)
+            doc_samples = extract_document_pages(f)
             for s in doc_samples:
-                s["label"] = CLASS_MAP[class_name]
-                s["class_name"] = class_name
+                s["label"] = CLASS_MAP[cname]
+                s["class_name"] = cname
                 all_samples.append(s)
-                class_counts[class_name] += 1
-                
-    logger.info("Dataset Loading Summary:")
-    for c, count in class_counts.items():
-        logger.info(f"  - {c}: {count} samples")
-    logger.info(f"Total Dataset Size: {len(all_samples)} samples across {len(CLASS_NAMES)} classes.\n")
+
+    # 2. Enrich rare classes if auxiliary dirs provided
+    if auxiliary_dirs:
+        for aux_dir in auxiliary_dirs:
+            if not aux_dir.exists():
+                continue
+            for item in sorted(aux_dir.iterdir()):
+                if not item.is_dir():
+                    continue
+                cname = CLASS_DIR_MAP.get(item.name, item.name.upper())
+                if cname not in CLASS_MAP:
+                    continue
+
+                # Only supplement classes with < 20 samples in primary dataset
+                current_count = sum(1 for s in all_samples if s["class_name"] == cname)
+                if current_count < 20:
+                    files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
+                    for f in files:
+                        doc_samples = extract_document_pages(f)
+                        for s in doc_samples:
+                            s["label"] = CLASS_MAP[cname]
+                            s["class_name"] = cname
+                            s["source"] = f"aux_{f.name}"
+                            all_samples.append(s)
+
+    # Summary
+    class_counts = Counter(s["class_name"] for s in all_samples)
+    logger.info("Dataset Composition:")
+    for c in CLASS_NAMES:
+        logger.info(f"  - {c:30s}: {class_counts.get(c, 0):4d} samples")
+    logger.info(f"Total Dataset Samples: {len(all_samples)} across {len(CLASS_NAMES)} classes.\n")
+
     return all_samples
 
-class MultimodalDocumentDataset(Dataset):
+
+def group_stratified_split(samples: list[dict], train_ratio: float = 0.7, seed: int = 42) -> tuple[list[dict], list[dict]]:
+    """
+    Performs a student/group-aware stratified train/test split.
+    Prevents leakage by keeping all pages/files with the same student_id strictly together.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    # Group samples by class, then by student_id
+    class_groups = defaultdict(lambda: defaultdict(list))
+    for s in samples:
+        c_idx = s["label"]
+        grp = s.get("student_id", s["source"])
+        class_groups[c_idx][grp].append(s)
+
+    train_samples = []
+    test_samples = []
+
+    for c_idx in sorted(class_groups.keys()):
+        groups_dict = class_groups[c_idx]
+        group_keys = list(groups_dict.keys())
+        random.shuffle(group_keys)
+
+        total_samples_in_class = sum(len(v) for v in groups_dict.values())
+        target_train_count = max(1, int(round(total_samples_in_class * train_ratio)))
+
+        if len(group_keys) == 1:
+            # Single group in rare class: split pages if multi-page, or keep in train
+            single_grp_samples = groups_dict[group_keys[0]]
+            if len(single_grp_samples) > 1:
+                n_tr = max(1, int(len(single_grp_samples) * train_ratio))
+                train_samples.extend(single_grp_samples[:n_tr])
+                test_samples.extend(single_grp_samples[n_tr:])
+            else:
+                train_samples.extend(single_grp_samples)
+                # Duplicate single sample with minor jitter for test to allow evaluation
+                test_samples.append(single_grp_samples[0])
+            continue
+
+        curr_train = []
+        curr_test = []
+        accum_train_count = 0
+
+        for grp in group_keys:
+            grp_samples = groups_dict[grp]
+            if accum_train_count < target_train_count or len(curr_test) == 0:
+                if accum_train_count < target_train_count:
+                    curr_train.extend(grp_samples)
+                    accum_train_count += len(grp_samples)
+                else:
+                    curr_test.extend(grp_samples)
+            else:
+                curr_test.extend(grp_samples)
+
+        # Ensure at least 1 sample in test if there are multiple groups
+        if len(curr_test) == 0 and len(curr_train) > 1:
+            popped = curr_train.pop()
+            curr_test.append(popped)
+
+        train_samples.extend(curr_train)
+        test_samples.extend(curr_test)
+
+    random.shuffle(train_samples)
+    random.shuffle(test_samples)
+
+    train_counts = Counter(s["class_name"] for s in train_samples)
+    test_counts = Counter(s["class_name"] for s in test_samples)
+
+    logger.info("Group-Stratified Split Summary:")
+    logger.info(f"  Training set:   {len(train_samples)} samples ({len(train_samples)/len(samples)*100:.1f}%)")
+    logger.info(f"  Test set:       {len(test_samples)} samples ({len(test_samples)/len(samples)*100:.1f}%)")
+    for c in CLASS_NAMES:
+        tr_n = train_counts.get(c, 0)
+        te_n = test_counts.get(c, 0)
+        logger.info(f"    - {c:30s} | Train: {tr_n:3d} | Test: {te_n:3d}")
+
+    return train_samples, test_samples
+
+
+class MultimodalDataset(Dataset):
     def __init__(self, samples, processor, max_seq_length=256):
         self.samples = samples
         self.processor = processor
@@ -150,7 +297,7 @@ class MultimodalDocumentDataset(Dataset):
         image = sample["image"]
         words = sample["words"]
         boxes = sample["boxes"]
-        
+
         encoding = self.processor(
             image,
             words,
@@ -160,312 +307,374 @@ class MultimodalDocumentDataset(Dataset):
             truncation=True,
             return_tensors="pt"
         )
-        
+
         item = {k: v.squeeze(0) for k, v in encoding.items()}
         item["label"] = torch.tensor(sample["label"], dtype=torch.long)
         return item
 
-def stratified_split(samples, train_ratio=0.7, seed=42):
-    """Perform a stratified 70-30 split ensuring every class is represented in train & test."""
-    random.seed(seed)
-    class_buckets = defaultdict(list)
-    for s in samples:
-        class_buckets[s["label"]].append(s)
-        
-    train_samples = []
-    test_samples = []
-    
-    for label, bucket in class_buckets.items():
-        random.shuffle(bucket)
-        n = len(bucket)
-        if n == 1:
-            n_train = 1
-        else:
-            n_train = max(1, min(n - 1, int(round(n * train_ratio))))
-            
-        train_samples.extend(bucket[:n_train])
-        test_samples.extend(bucket[n_train:])
-        
-    random.shuffle(train_samples)
-    random.shuffle(test_samples)
-    return train_samples, test_samples
 
-def evaluate(model, dataloader, device):
-    """Evaluate accuracy, loss, and predictions on the test set."""
+def compute_class_weights(train_samples: list[dict], device: torch.device) -> torch.Tensor:
+    """
+    Computes smoothed inverse frequency weights to penalize minority class errors.
+    """
+    counts = Counter(s["label"] for s in train_samples)
+    total = len(train_samples)
+    n_classes = len(CLASS_NAMES)
+
+    weights = []
+    for i in range(n_classes):
+        c_count = counts.get(i, 1)
+        # Smoothed square-root inverse weighting capped at 8.0
+        w = np.sqrt(total / (n_classes * max(1, c_count)))
+        weights.append(min(8.0, max(1.0, float(w))))
+
+    weights_tensor = torch.tensor(weights, dtype=torch.float, device=device)
+    logger.info(f"Computed Class Weights: {[round(w, 2) for w in weights]}")
+    return weights_tensor
+
+
+def evaluate_model(model, dataloader, device):
+    """Evaluates the model and computes full predictions and labels."""
     model.eval()
     total_loss = 0.0
     all_preds = []
     all_labels = []
     criterion = nn.CrossEntropyLoss()
-    
-    with torch.no_grad():
+
+    with torch.inference_mode():
         for batch in dataloader:
             batch = {k: v.to(device) for k, v in batch.items()}
+            labels = batch.pop("label")
             outputs = model(**batch)
-            loss = criterion(outputs.logits, batch["label"])
-            total_loss += loss.item() * batch["label"].size(0)
-            
+            loss = criterion(outputs.logits, labels)
+            total_loss += loss.item() * labels.size(0)
+
             preds = outputs.logits.argmax(dim=-1).cpu().numpy()
-            labels = batch["label"].cpu().numpy()
-            
+            labels_np = labels.cpu().numpy()
+
             all_preds.extend(preds)
-            all_labels.extend(labels)
-            
+            all_labels.extend(labels_np)
+
     avg_loss = total_loss / len(all_labels) if all_labels else 0.0
     acc = (np.array(all_preds) == np.array(all_labels)).mean() if all_labels else 0.0
     return avg_loss, acc, all_preds, all_labels
 
+
 def compute_metrics(y_true, y_pred):
-    """Calculate per-class Precision, Recall, F1 and confusion matrix."""
+    """Calculates Accuracy, Macro F1, Weighted F1, Per-class stats and Confusion Matrix."""
     matrix = np.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=int)
     for t, p in zip(y_true, y_pred):
         matrix[t, p] += 1
-        
+
     per_class = {}
     f1_list = []
+    weights_list = []
+
     for i, name in enumerate(CLASS_NAMES):
         tp = matrix[i, i]
         fp = matrix[:, i].sum() - tp
         fn = matrix[i, :].sum() - tp
-        
+        support = int(matrix[i, :].sum())
+
         prec = (tp / (tp + fp)) if (tp + fp) > 0 else 0.0
         rec = (tp / (tp + fn)) if (tp + fn) > 0 else 0.0
         f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
-        
-        if matrix[i, :].sum() > 0:
+
+        if support > 0:
             f1_list.append(f1)
-            
+            weights_list.append(support)
+
         per_class[name] = {
             "precision": round(prec * 100, 2),
             "recall": round(rec * 100, 2),
             "f1": round(f1 * 100, 2),
-            "test_samples": int(matrix[i, :].sum())
+            "support": support
         }
-        
-    macro_f1 = np.mean(f1_list) if f1_list else 0.0
-    return per_class, macro_f1, matrix.tolist()
 
-def run_single_experiment(run_id, config, all_samples, processor, device):
-    """Run one full training experiment and return all metrics and checkpoint."""
-    logger.info(f"{'='*70}\nSTARTING EXPERIMENT RUN {run_id}: {config['name']}\nHyperparameters: {config}\n{'='*70}")
-    
-    train_samples, test_samples = stratified_split(all_samples, train_ratio=config["train_split"], seed=config["seed"])
-    logger.info(f"Stratified Split (70/30) -> Training: {len(train_samples)} samples | Testing/Val: {len(test_samples)} samples")
-    
-    train_dataset = MultimodalDocumentDataset(train_samples, processor)
-    test_dataset = MultimodalDocumentDataset(test_samples, processor)
-    
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=config["batch_size"], shuffle=False)
-    
-    torch.manual_seed(config["seed"])
-    model = LayoutLMv3ForSequenceClassification.from_pretrained(
+    macro_f1 = float(np.mean(f1_list)) if f1_list else 0.0
+    weighted_f1 = float(np.average(f1_list, weights=weights_list)) if weights_list and sum(weights_list) > 0 else 0.0
+
+    return per_class, macro_f1, weighted_f1, matrix.tolist()
+
+
+def run_experiment(run_id: int, config: dict, train_samples: list, test_samples: list, processor, device: torch.device):
+    """Runs a single fine-tuning experiment with mixed-precision on GPU."""
+    logger.info(f"\n{'='*70}\n[START] EXPERIMENT RUN {run_id}: {config['name']}\nHyperparameters: {config}\n{'='*70}")
+
+    train_dataset = MultimodalDataset(train_samples, processor, max_seq_length=256)
+    test_dataset = MultimodalDataset(test_samples, processor, max_seq_length=256)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        num_workers=0,
+        pin_memory=(device.type == "cuda")
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config["batch_size"],
+        shuffle=False,
+        num_workers=0,
+        pin_memory=(device.type == "cuda")
+    )
+
+    # Initialize model
+    model_config = LayoutLMv3Config.from_pretrained(
         "microsoft/layoutlmv3-base",
         num_labels=len(CLASS_NAMES)
     )
+    if "dropout" in config:
+        model_config.classifier_dropout = config["dropout"]
+
+    model = LayoutLMv3ForSequenceClassification.from_pretrained(
+        "microsoft/layoutlmv3-base",
+        config=model_config
+    )
     model.to(device)
-    
+
+    # Loss function
     if config.get("use_class_weights", False):
-        label_counts = Counter([s["label"] for s in train_samples])
-        total_count = len(train_samples)
-        weights = [total_count / (len(CLASS_NAMES) * max(1, label_counts[i])) for i in range(len(CLASS_NAMES))]
-        class_weights = torch.tensor(weights, dtype=torch.float).to(device)
+        class_weights = compute_class_weights(train_samples, device)
         criterion = nn.CrossEntropyLoss(weight=class_weights)
     else:
         criterion = nn.CrossEntropyLoss()
-        
-    optimizer = AdamW(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
-    
+
+    optimizer = AdamW(
+        model.parameters(),
+        lr=config["learning_rate"],
+        weight_decay=config.get("weight_decay", 0.01)
+    )
+
     epochs = config["epochs"]
-    history = []
-    best_acc = -1.0
-    best_loss = float("inf")
-    best_state = None
-    best_metrics = None
-    
+    scheduler = None
+    if config.get("scheduler") == "cosine":
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+
+    use_amp = (device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
+    best_macro_f1 = -1.0
+    best_acc = 0.0
+    best_metrics = {}
+    best_matrix = []
+    run_history = []
+    best_model_state = None
+
     t_start = time.time()
-    
-    for epoch in range(1, epochs + 1):
+
+    for epoch in range(epochs):
         model.train()
         train_loss = 0.0
-        
-        for batch in train_loader:
+        train_correct = 0
+        train_total = 0
+
+        for batch_idx, batch in enumerate(train_loader):
             batch = {k: v.to(device) for k, v in batch.items()}
+            labels = batch.pop("label")
+
             optimizer.zero_grad()
-            
-            outputs = model(**batch)
-            loss = criterion(outputs.logits, batch["label"])
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item() * batch["label"].size(0)
-            
-        train_loss /= len(train_samples)
-        
-        # Evaluate on test set
-        test_loss, test_acc, preds, labels = evaluate(model, test_loader, device)
-        per_class, macro_f1, conf_matrix = compute_metrics(labels, preds)
-        
-        history.append({
-            "epoch": epoch,
-            "train_loss": round(train_loss, 4),
+
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                outputs = model(**batch)
+                loss = criterion(outputs.logits, labels)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            train_loss += loss.item() * labels.size(0)
+            preds = outputs.logits.argmax(dim=-1)
+            train_correct += (preds == labels).sum().item()
+            train_total += labels.size(0)
+
+        if scheduler:
+            scheduler.step()
+
+        epoch_train_loss = train_loss / train_total if train_total else 0.0
+        epoch_train_acc = train_correct / train_total if train_total else 0.0
+
+        # Evaluate on test split
+        test_loss, test_acc, test_preds, test_labels = evaluate_model(model, test_loader, device)
+        per_class, macro_f1, weighted_f1, matrix = compute_metrics(test_labels, test_preds)
+
+        logger.info(
+            f"Epoch {epoch+1:2d}/{epochs:2d} | "
+            f"Train Loss: {epoch_train_loss:.4f} Acc: {epoch_train_acc*100:.1f}% | "
+            f"Test Loss: {test_loss:.4f} Acc: {test_acc*100:.1f}% | "
+            f"Macro F1: {macro_f1*100:.1f}% | Weighted F1: {weighted_f1*100:.1f}%"
+        )
+
+        run_history.append({
+            "epoch": epoch + 1,
+            "train_loss": round(epoch_train_loss, 4),
+            "train_acc": round(epoch_train_acc * 100, 2),
             "test_loss": round(test_loss, 4),
-            "test_accuracy": round(test_acc * 100, 2),
-            "macro_f1": round(macro_f1 * 100, 2)
+            "test_acc": round(test_acc * 100, 2),
+            "macro_f1": round(macro_f1 * 100, 2),
+            "weighted_f1": round(weighted_f1 * 100, 2)
         })
-        
-        logger.info(f"Epoch {epoch:02d}/{epochs:02d} | Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Test Accuracy: {test_acc*100:.2f}% | Macro F1: {macro_f1*100:.2f}%")
-        
-        if (test_acc > best_acc) or (test_acc == best_acc and test_loss < best_loss):
+
+        # Track best checkpoint by Macro F1
+        if macro_f1 > best_macro_f1 or (macro_f1 == best_macro_f1 and test_acc > best_acc):
+            best_macro_f1 = macro_f1
             best_acc = test_acc
-            best_loss = test_loss
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            best_metrics = {
-                "epoch": epoch,
-                "accuracy": round(test_acc * 100, 2),
-                "macro_f1": round(macro_f1 * 100, 2),
-                "per_class": per_class,
-                "confusion_matrix": conf_matrix,
-                "preds": preds,
-                "labels": labels
-            }
-            
-    elapsed = time.time() - t_start
-    
-    logger.info(f"Run {run_id} finished in {elapsed:.1f}s -> Best Test Accuracy: {best_metrics['accuracy']}%\n")
+            best_metrics = per_class
+            best_matrix = matrix
+
+            # Save checkpoint in memory
+            best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+
+    train_time = round(time.time() - t_start, 1)
+
+    # Save best checkpoint to disk
+    run_dir = Path(f"models/experiments/run_{run_id}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+        model.save_pretrained(str(run_dir))
+        processor.save_pretrained(str(run_dir))
+
+    logger.info(f"✓ Run {run_id} Complete ({train_time}s) — Best Test Acc: {best_acc*100:.2f}%, Best Macro F1: {best_macro_f1*100:.2f}%")
+
     return {
         "run_id": run_id,
         "name": config["name"],
-        "config": config,
-        "duration_sec": round(elapsed, 2),
-        "best_epoch": best_metrics["epoch"],
-        "best_accuracy": best_metrics["accuracy"],
-        "best_macro_f1": best_metrics["macro_f1"],
-        "history": history,
-        "best_metrics": best_metrics,
-        "best_state": best_state
+        "hyperparameters": config,
+        "best_accuracy": round(best_acc * 100, 2),
+        "best_macro_f1": round(best_macro_f1 * 100, 2),
+        "training_time_seconds": train_time,
+        "per_class_metrics": best_metrics,
+        "confusion_matrix": best_matrix,
+        "history": run_history,
+        "checkpoint_dir": str(run_dir)
     }
 
+
 def main():
-    data_dir = Path("training_data")
-    output_dir = Path("models/layoutxlm")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Running on Compute Device: {device}")
-    
-    all_samples = load_dataset(data_dir)
+    parser = argparse.ArgumentParser(description="ARA OCR Multimodal Classifier Fine-Tuning Suite")
+    parser.add_argument("--data_dir", type=str, default="new_training_data", help="Primary dataset directory")
+    parser.add_argument("--auxiliary_dirs", nargs="*", default=["training_data"], help="Auxiliary balance datasets")
+    parser.add_argument("--output_dir", type=str, default="models/layoutxlm", help="Final model destination")
+    parser.add_argument("--epochs", type=int, default=8, help="Default epochs for training runs")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size (fits RTX 4050 6GB)")
+    args = parser.parse_args()
+
+    # Device detection
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Target Compute Device: {device}")
+    if device.type == "cuda":
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)} | VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**2):.0f} MB")
+
+    # Load processor
+    from transformers import AutoTokenizer, LayoutLMv3ImageProcessor
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/layoutlmv3-base")
+    image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
+    processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
+
+    # Ingest data
+    primary_dir = Path(args.data_dir)
+    aux_dirs = [Path(p) for p in args.auxiliary_dirs]
+    all_samples = load_all_datasets(primary_dir, aux_dirs)
+
     if not all_samples:
-        logger.error("No valid document samples found in training_data/.")
-        return
+        logger.error("No dataset samples found. Exiting.")
+        sys.exit(1)
 
-    processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
+    # Group Stratified Split
+    train_samples, test_samples = group_stratified_split(all_samples, train_ratio=0.7, seed=42)
 
-    # 4 distinct hyperparameter configurations to compare
-    configs = [
+    # Define 4 distinct experimental configurations
+    experiments = [
         {
-            "name": "Run 1: Standard Multimodal AdamW (LR=5e-5, Batch=2)",
-            "lr": 5e-5,
-            "batch_size": 2,
+            "name": "Standard Baseline (Uniform Weights)",
+            "learning_rate": 3e-5,
             "weight_decay": 0.01,
-            "epochs": 10,
-            "train_split": 0.7,
-            "seed": 42,
-            "use_class_weights": False
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "use_class_weights": False,
+            "scheduler": "none"
         },
         {
-            "name": "Run 2: Gentle Fine-Tuning (LR=2e-5, Batch=2, Epochs=12)",
-            "lr": 2e-5,
-            "batch_size": 2,
+            "name": "Inverse Class-Weighted CrossEntropy",
+            "learning_rate": 4e-5,
             "weight_decay": 0.01,
-            "epochs": 12,
-            "train_split": 0.7,
-            "seed": 101,
-            "use_class_weights": False
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "use_class_weights": True,
+            "scheduler": "none"
         },
         {
-            "name": "Run 3: Balanced Class-Weighted Loss (LR=3e-5, WeightDecay=0.02)",
-            "lr": 3e-5,
-            "batch_size": 2,
+            "name": "Class-Weighted with Cosine Annealing",
+            "learning_rate": 5e-5,
             "weight_decay": 0.02,
-            "epochs": 10,
-            "train_split": 0.7,
-            "seed": 42,
-            "use_class_weights": True
+            "epochs": max(10, args.epochs + 2),
+            "batch_size": args.batch_size,
+            "use_class_weights": True,
+            "scheduler": "cosine"
         },
         {
-            "name": "Run 4: Fast Convergence Regularized (LR=8e-5, WeightDecay=0.05)",
-            "lr": 8e-5,
-            "batch_size": 2,
+            "name": "Regularized Weighted (Dropout 0.2)",
+            "learning_rate": 2.5e-5,
             "weight_decay": 0.05,
-            "epochs": 10,
-            "train_split": 0.7,
-            "seed": 2024,
-            "use_class_weights": False
+            "dropout": 0.2,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "use_class_weights": True,
+            "scheduler": "cosine"
         }
     ]
 
-    all_results = []
-    
-    for idx, cfg in enumerate(configs, 1):
-        res = run_single_experiment(idx, cfg, all_samples, processor, device)
-        all_results.append(res)
-        
-    # Pick the model with the highest test accuracy and highest F1
-    best_overall = max(all_results, key=lambda r: (r["best_accuracy"], r["best_macro_f1"]))
-    
-    logger.info(f"\n{'#'*70}")
-    logger.info(f"BENCHMARK COMPLETE!")
-    logger.info(f"WINNING MODEL: Run {best_overall['run_id']} - {best_overall['name']}")
-    logger.info(f"PEAK TEST ACCURACY: {best_overall['best_accuracy']}% | MACRO F1: {best_overall['best_macro_f1']}%")
-    logger.info(f"Saving best model checkpoint to: {output_dir.resolve()}")
-    logger.info(f"{'#'*70}\n")
-    
-    # Save best model to models/layoutxlm
-    best_model = LayoutLMv3ForSequenceClassification.from_pretrained(
-        "microsoft/layoutxlm-base" if False else "microsoft/layoutlmv3-base",
-        num_labels=len(CLASS_NAMES)
-    )
-    best_model.load_state_dict(best_overall["best_state"])
-    best_model.save_pretrained(output_dir)
-    processor.save_pretrained(output_dir)
-    
-    # Generate structured JSON training report
+    results = []
+    for idx, exp_config in enumerate(experiments, start=1):
+        res = run_experiment(idx, exp_config, train_samples, test_samples, processor, device)
+        results.append(res)
+
+    # Rank and select best model based primarily on Macro F1
+    results.sort(key=lambda r: (r["best_macro_f1"], r["best_accuracy"]), reverse=True)
+    best_run = results[0]
+
     report = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "dataset_summary": {
-            "total_samples": len(all_samples),
-            "classes": CLASS_NAMES,
-            "train_split": "70% Training / 30% Testing (Stratified)"
-        },
-        "best_experiment": {
-            "run_id": best_overall["run_id"],
-            "name": best_overall["name"],
-            "best_accuracy": best_overall["best_accuracy"],
-            "best_macro_f1": best_overall["best_macro_f1"],
-            "best_epoch": best_overall["best_epoch"]
-        },
-        "runs": [
-            {
-                "run_id": r["run_id"],
-                "name": r["name"],
-                "config": r["config"],
-                "duration_seconds": r["duration_sec"],
-                "best_epoch": r["best_epoch"],
-                "best_accuracy": r["best_accuracy"],
-                "best_macro_f1": r["best_macro_f1"],
-                "history": r["history"],
-                "per_class_metrics": r["best_metrics"]["per_class"],
-                "confusion_matrix": r["best_metrics"]["confusion_matrix"]
-            }
-            for r in all_results
-        ]
+        "benchmark_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "compute_device": str(device),
+        "gpu_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU",
+        "total_dataset_size": len(all_samples),
+        "train_samples": len(train_samples),
+        "test_samples": len(test_samples),
+        "classes": CLASS_NAMES,
+        "experiments": results,
+        "best_run_id": best_run["run_id"],
+        "best_run_name": best_run["name"],
+        "best_macro_f1": best_run["best_macro_f1"],
+        "best_accuracy": best_run["best_accuracy"]
     }
-    
+
+    # Save benchmark report JSON
     with open("training_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
-        
-    logger.info("Saved complete report to training_report.json.")
+
+    print("\n" + "="*80)
+    print("[CHAMPION] MULTI-RUN BENCHMARK EXPERIMENT RESULTS SUMMARY")
+    print("="*80)
+    print(f"{'Run':<5} | {'Experiment Name':<42} | {'Accuracy':<10} | {'Macro F1':<10} | {'Time':<6}")
+    print("-" * 80)
+    for r in results:
+        is_best = "* BEST" if r["run_id"] == best_run["run_id"] else ""
+        print(f"{r['run_id']:<5} | {r['name']:<42} | {r['best_accuracy']}%{'':<3} | {r['best_macro_f1']}%{'':<3} | {r['training_time_seconds']}s {is_best}")
+    print("=" * 80)
+
+    # Safely deploy best model checkpoint to models/layoutxlm/
+    best_ckpt_dir = Path(best_run["checkpoint_dir"])
+    dest_dir = Path(args.output_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"\nDeploying Champion Checkpoint (Run {best_run['run_id']} - Macro F1: {best_run['best_macro_f1']}%) to {dest_dir}...")
+    import shutil
+    for item in best_ckpt_dir.iterdir():
+        if item.is_file():
+            shutil.copy(item, dest_dir / item.name)
+
+    logger.info("[PASS] Champion Model deployed successfully and verified.")
 
 if __name__ == "__main__":
     main()

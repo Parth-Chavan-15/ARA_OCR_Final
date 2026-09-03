@@ -96,10 +96,10 @@ class LayoutXLMClassifier:
                     str(fine_tuned_path),
                     num_labels=NUM_CLASSES,
                 )
-                self.processor = LayoutLMv3Processor.from_pretrained(
-                    str(fine_tuned_path),
-                    apply_ocr=False
-                )
+                from transformers import AutoTokenizer, LayoutLMv3ImageProcessor
+                tokenizer = AutoTokenizer.from_pretrained(str(fine_tuned_path))
+                image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
+                self.processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
                 self.fine_tuned = True
                 logger.info("fine_tuned_model_loaded_successfully")
             else:
@@ -119,8 +119,22 @@ class LayoutXLMClassifier:
                 )
                 self.fine_tuned = False
 
+            # Configure device
+            if settings.USE_GPU and torch.cuda.is_available():
+                self.device = torch.device(f"cuda:{settings.GPU_DEVICE_ID}")
+                gpu_name = torch.cuda.get_device_name(settings.GPU_DEVICE_ID)
+                vram_mb = torch.cuda.get_device_properties(settings.GPU_DEVICE_ID).total_memory / (1024**2)
+                logger.info(
+                    "layoutxlm_gpu_enabled",
+                    device=str(self.device),
+                    gpu=gpu_name,
+                    vram_mb=f"{vram_mb:.0f}",
+                )
+            else:
+                self.device = torch.device("cpu")
+                logger.info("layoutxlm_cpu_mode", device="cpu")
+
             self.model.eval()
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
             self.model_loaded = True
 
@@ -128,6 +142,7 @@ class LayoutXLMClassifier:
                 "multimodal_classifier_ready",
                 device=str(self.device),
                 fine_tuned=self.fine_tuned,
+                gpu_enabled=(self.device.type == "cuda"),
             )
 
         except Exception as e:
@@ -183,9 +198,11 @@ class LayoutXLMClassifier:
             # Move to device
             encoding = {k: v.to(self.device) for k, v in encoding.items()}
 
-            # Run inference
-            with torch.no_grad():
-                outputs = self.model(**encoding)
+            # Run inference with mixed precision on GPU
+            use_amp = (self.device.type == "cuda")
+            with torch.inference_mode():
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    outputs = self.model(**encoding)
                 logits = outputs.logits
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 probs_np = probs.cpu().numpy()[0]
@@ -200,20 +217,136 @@ class LayoutXLMClassifier:
             predicted_class = self.CLASSES[top_idx]
             confidence = float(probs_np[top_idx])
 
+            # Hybrid Evidence Calibration
+            full_text_lower = " ".join(words).lower()
+
+            # 1. Distinct Out of Scope keywords (NCL, Income, Domicile, Admission/CET, Marksheet)
+            oos_cues = [
+                "non creamy layer", "non-creamy layer", "non creamy", "non-creamy", "ncl",
+                "income certificate", "domicile certificate", "nationality certificate",
+                "admission form", "state common entrance test cell",
+                "allotted choice code", "allotted seat type", "cap round", "cap allotment",
+                "tuition fees", "institute reporting"
+            ]
+            has_oos_marker = any(cue in full_text_lower for cue in oos_cues)
+
+            # 2. Validity Receipt cues (Receipt from Scrutiny Committee)
+            is_validity_receipt = (
+                ("receipt" in full_text_lower or "पावती" in full_text_lower or "acknowledgement" in full_text_lower)
+                and (
+                    "scrutiny committee" in full_text_lower
+                    or "district caste" in full_text_lower
+                    or "caste certificate verification" in full_text_lower
+                    or "caste validity" in full_text_lower
+                    or "जात प्रमाणपत्र पडताळणी" in full_text_lower
+                    or "पडताळणी समिती" in full_text_lower
+                    or "supporting documents receipt" in full_text_lower
+                )
+                and "certificate of validity" not in full_text_lower
+                and "form 15" not in full_text_lower
+                and "form-15" not in full_text_lower
+                and "claim is held valid" not in full_text_lower
+            )
+
+            # 3. Caste Validity Certificate cues (True Certificate)
+            is_validity_cert = (
+                ("certificate of validity" in full_text_lower
+                 or "validity certificate" in full_text_lower
+                 or "जात वैधता प्रमाणपत्र" in full_text_lower
+                 or "form 15" in full_text_lower
+                 or "form-15" in full_text_lower
+                 or "claim is held valid" in full_text_lower
+                 or "claim is valid" in full_text_lower
+                 or ("district caste certificate scrutiny committee" in full_text_lower and not is_validity_receipt)
+                 or ("scrutiny committee" in full_text_lower and not is_validity_receipt))
+                and not is_validity_receipt
+                and not has_oos_marker
+            )
+
+            # 4. Caste Certificate cues (True Caste Certificate)
+            is_caste_cert = (
+                ("caste certificate" in full_text_lower
+                 or "जातीचे प्रमाणपत्र" in full_text_lower
+                 or "जातीचा दाखला" in full_text_lower
+                 or "form 6" in full_text_lower or "form-6" in full_text_lower
+                 or "form 7" in full_text_lower or "form-7" in full_text_lower
+                 or "form 8" in full_text_lower or "form-8" in full_text_lower
+                 or "produced by other backward classes" in full_text_lower
+                 or "produced by scheduled castes" in full_text_lower)
+                and not has_oos_marker
+                and not is_validity_cert
+                and not is_validity_receipt
+            )
+
+            # 5. Proforma O cues
+            is_proforma = (
+                any(cue in full_text_lower for cue in [
+                    "proforma-o", "proforma -o", "proforma o", "proforma-0", "proforma 0",
+                    "प्रपत्र-ओ", "प्रपत्र ओ", "minority community student", "self declaration for minority"
+                ])
+                and not has_oos_marker
+                and not is_validity_cert
+                and not is_validity_receipt
+            )
+
+            # 6. Leaving Certificate cues
+            is_lc = (
+                any(cue in full_text_lower for cue in [
+                    "leaving certificate", "school leaving", "college leaving", "transfer certificate",
+                    "lc no", "lc no.", "name of the pupil", "general register", "शाळा सोडल्याचा दाखला"
+                ])
+                and not has_oos_marker
+                and not is_validity_cert
+                and not is_caste_cert
+                and not is_validity_receipt
+            )
+
+            # 7. Out of Scope
+            is_oos = (
+                has_oos_marker
+                and not is_validity_receipt
+            )
+
+            # Route by priority
+            if is_oos:
+                logger.info("rule_calibration_applied", rule="OUT_OF_SCOPE")
+                predicted_class = "UNKNOWN_OUT_OF_SCOPE"
+                confidence = max(confidence, 0.98)
+            elif is_validity_receipt:
+                logger.info("rule_calibration_applied", rule="CASTE_VALIDITY_RECEIPT")
+                predicted_class = "CASTE_VALIDITY_RECEIPT"
+                confidence = max(confidence, 0.98)
+            elif is_validity_cert:
+                logger.info("rule_calibration_applied", rule="CASTE_VALIDITY_CERTIFICATE")
+                predicted_class = "CASTE_VALIDITY_CERTIFICATE"
+                confidence = max(confidence, 0.98)
+            elif is_caste_cert:
+                logger.info("rule_calibration_applied", rule="CASTE_CERTIFICATE")
+                predicted_class = "CASTE_CERTIFICATE"
+                confidence = max(confidence, 0.98)
+            elif is_proforma:
+                logger.info("rule_calibration_applied", rule="PROFORMA_O")
+                predicted_class = "PROFORMA_O"
+                confidence = max(confidence, 0.98)
+            elif is_lc:
+                logger.info("rule_calibration_applied", rule="LEAVING_CERTIFICATE")
+                predicted_class = "LEAVING_CERTIFICATE"
+                confidence = max(confidence, 0.98)
+
             # Apply confidence threshold — below threshold -> UNKNOWN (§19)
-            if confidence < settings.CLASSIFICATION_CONFIDENCE_THRESHOLD:
+            if confidence < settings.CONFIDENCE_THRESHOLD:
                 logger.info(
-                    "low_confidence_classification",
+                    "confidence_below_threshold",
                     predicted=predicted_class,
                     confidence=confidence,
-                    threshold=settings.CLASSIFICATION_CONFIDENCE_THRESHOLD,
+                    threshold=settings.CONFIDENCE_THRESHOLD,
                 )
                 predicted_class = "UNKNOWN_OUT_OF_SCOPE"
 
             logger.info(
                 "classification_result",
                 predicted_class=predicted_class,
-                confidence=f"{confidence:.4f}",
+                confidence=round(confidence, 4),
                 fine_tuned=self.fine_tuned,
             )
 
@@ -232,7 +365,7 @@ class LayoutXLMClassifier:
             )
 
     def _prepare_tokens(
-        self, ocr_tokens: list[Any]
+        self, ocr_tokens: list[Any], img_w: int = 1000, img_h: int = 1000
     ) -> tuple[list[str], list[list[int]]]:
         """Convert OCR tokens to normalized coordinates 0-1000."""
         words = []
@@ -243,20 +376,31 @@ class LayoutXLMClassifier:
             if not text:
                 continue
 
-            x1 = getattr(token, "x1", 0)
-            y1 = getattr(token, "y1", 0)
-            x2 = getattr(token, "x2", 0)
-            y2 = getattr(token, "y2", 0)
+            if hasattr(token, "bbox") and isinstance(token.bbox, (list, tuple)) and len(token.bbox) == 4:
+                x1, y1, x2, y2 = token.bbox
+            else:
+                x1 = getattr(token, "x1", 0)
+                y1 = getattr(token, "y1", 0)
+                x2 = getattr(token, "x2", 0)
+                y2 = getattr(token, "y2", 0)
 
-            norm_box = [
-                max(0, min(1000, int(x1))),
-                max(0, min(1000, int(y1))),
-                max(0, min(1000, int(x2))),
-                max(0, min(1000, int(y2))),
-            ]
+            # Ensure box coordinates are ordered and normalized 0-1000
+            x_min, x_max = min(float(x1), float(x2)), max(float(x1), float(x2))
+            y_min, y_max = min(float(y1), float(y2)), max(float(y1), float(y2))
+
+            if img_w > 1000 or img_h > 1000:
+                x_min = (x_min / img_w) * 1000
+                x_max = (x_max / img_w) * 1000
+                y_min = (y_min / img_h) * 1000
+                y_max = (y_max / img_h) * 1000
+
+            x_min = max(0, min(1000, int(x_min)))
+            y_min = max(0, min(1000, int(y_min)))
+            x_max = max(x_min + 1, min(1000, int(x_max)))
+            y_max = max(y_min + 1, min(1000, int(y_max)))
 
             words.append(text)
-            boxes.append(norm_box)
+            boxes.append([x_min, y_min, x_max, y_max])
 
         return words, boxes
 
