@@ -11,6 +11,9 @@ from app.config import settings
 import app.models  # Ensures all ORM models are registered in registry
 from app.models.candidate import Candidate
 from app.models.document import Document
+from app.models.ocr_result import OcrResult
+from app.models.ocr_token import OcrToken
+from app.models.classification_result import ClassificationResult
 
 logger = structlog.get_logger('sync_service')
 
@@ -42,17 +45,25 @@ OFFICIAL_CANDIDATE_NAMES: Dict[str, str] = {
     "EN20260025": "ADITYA RAJENDRA NAGARE",
     "EN20260026": "AADI ANIL MOKASHI",
     "EN20260027": "CHANDWANI KARAN KAILASH",
+    "EN25272514": "Rahul Sharma",
+    "EN25272515": "Priya Deshmukh",
+    "EN25272516": "Amit Jadhav",
+    "EN25272517": "Sneha Patil",
+    "EN25272518": "Vikram Kulkarni",
 }
 
 def sync_disk_storage(db: Session) -> Dict[str, Any]:
-    originals_dir = Path(settings.originals_dir)
+    originals_dir = Path(settings.originals_dir).resolve()
     if not originals_dir.exists():
         originals_dir.mkdir(parents=True, exist_ok=True)
         return {"status": "success", "candidates_synced": 0, "documents_synced": 0}
 
     candidates_added = 0
     documents_added = 0
+    documents_updated = 0
     candidates_updated = 0
+
+    valid_disk_doc_ids = set()
 
     for entry in sorted(originals_dir.iterdir()):
         if not entry.is_dir():
@@ -117,19 +128,51 @@ def sync_disk_storage(db: Session) -> Dict[str, Any]:
                 )
                 db.add(doc)
                 db.commit()
+                valid_disk_doc_ids.add(doc.document_id)
                 documents_added += 1
                 logger.info(
                     "synced_new_document",
                     candidate_id=candidate.candidate_id,
                     filename=filename,
                 )
+            else:
+                valid_disk_doc_ids.add(existing_doc.document_id)
+                # Check and update file path if changed or moved
+                if existing_doc.file_path != file_path:
+                    existing_doc.file_path = file_path
+                    db.commit()
+                    documents_updated += 1
+                    logger.info(
+                        "updated_document_path",
+                        document_id=existing_doc.document_id,
+                        file_path=file_path,
+                    )
 
+    # Prune orphaned documents in DB that no longer exist on disk
+    all_db_docs = db.query(Document).all()
+    pruned_count = 0
+    for db_doc in all_db_docs:
+        if not os.path.exists(db_doc.file_path):
+            # Clean up dependent relations first
+            db.query(ClassificationResult).filter(ClassificationResult.document_id == db_doc.document_id).delete()
+            db.query(OcrToken).filter(OcrToken.ocr_id.in_(
+                db.query(OcrResult.ocr_id).filter(OcrResult.document_id == db_doc.document_id)
+            )).delete(synchronize_session=False)
+            db.query(OcrResult).filter(OcrResult.document_id == db_doc.document_id).delete()
+            db.delete(db_doc)
+            pruned_count += 1
+            logger.info("pruned_missing_document", document_id=db_doc.document_id, file_path=db_doc.file_path)
+
+    if pruned_count > 0:
+        db.commit()
 
     return {
         "status": "success",
         "candidates_added": candidates_added,
         "candidates_updated": candidates_updated,
         "documents_added": documents_added,
+        "documents_updated": documents_updated,
+        "documents_pruned": pruned_count,
         "total_candidates": db.query(Candidate).count(),
         "total_documents": db.query(Document).count(),
     }

@@ -78,7 +78,10 @@ class LayoutXLMClassifier:
         """Load multimodal model and processor."""
         try:
             from transformers import (
+                AutoTokenizer,
+                LayoutLMv3Config,
                 LayoutLMv3ForSequenceClassification,
+                LayoutLMv3ImageProcessor,
                 LayoutLMv3Processor,
             )
             import torch
@@ -86,8 +89,12 @@ class LayoutXLMClassifier:
             self._torch = torch
             fine_tuned_path = settings.layoutxlm_dir
             config_path = fine_tuned_path / "config.json"
+            has_weights = (
+                (fine_tuned_path / "model.safetensors").exists()
+                or (fine_tuned_path / "pytorch_model.bin").exists()
+            )
 
-            if fine_tuned_path.exists() and config_path.exists():
+            if fine_tuned_path.exists() and has_weights:
                 logger.info(
                     "loading_fine_tuned_model",
                     path=str(fine_tuned_path),
@@ -96,12 +103,22 @@ class LayoutXLMClassifier:
                     str(fine_tuned_path),
                     num_labels=NUM_CLASSES,
                 )
-                from transformers import AutoTokenizer, LayoutLMv3ImageProcessor
                 tokenizer = AutoTokenizer.from_pretrained(str(fine_tuned_path))
                 image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
                 self.processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
                 self.fine_tuned = True
                 logger.info("fine_tuned_model_loaded_successfully")
+            elif fine_tuned_path.exists() and config_path.exists():
+                logger.info(
+                    "initializing_model_from_config",
+                    path=str(fine_tuned_path),
+                )
+                config = LayoutLMv3Config.from_pretrained(str(fine_tuned_path), num_labels=NUM_CLASSES)
+                self.model = LayoutLMv3ForSequenceClassification(config)
+                tokenizer = AutoTokenizer.from_pretrained(str(fine_tuned_path))
+                image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
+                self.processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
+                self.fine_tuned = False
             else:
                 logger.warning(
                     "no_fine_tuned_weights_found",

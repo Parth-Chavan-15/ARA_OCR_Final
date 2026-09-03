@@ -1,25 +1,6 @@
 {
-  "default_paddle_version": "2.6.1",
+  "default_paddle_version": "3.3.0",
   "paddle_versions": {
-    "2.6.1": {
-      "cuda_builds": {
-        "11.8": {
-          "tag": "post118",
-          "index_url": "https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html",
-          "package": "paddlepaddle-gpu==2.6.1.post118"
-        },
-        "12.0": {
-          "tag": "post120",
-          "index_url": "https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html",
-          "package": "paddlepaddle-gpu==2.6.1.post120"
-        },
-        "12.1": {
-          "tag": "post120",
-          "index_url": "https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html",
-          "package": "paddlepaddle-gpu==2.6.1.post120"
-        }
-      }
-    },
     "3.3.0": {
       "cuda_builds": {
         "11.8": {
@@ -29,12 +10,20 @@
         "12.6": {
           "tag": "cu126",
           "index_url": "https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+        },
+        "12.9": {
+          "tag": "cu129",
+          "index_url": "https://www.paddlepaddle.org.cn/packages/stable/cu129/"
+        },
+        "13.0": {
+          "tag": "cu130",
+          "index_url": "https://www.paddlepaddle.org.cn/packages/stable/cu130/"
         }
       }
     }
   },
   "pytorch_versions": {
-    "default_version": "2.5.1",
+    "default_version": "2.4.0",
     "cuda_builds": {
       "11.8": {
         "tag": "cu118",
@@ -55,4 +44,3 @@
     }
   }
 }
-

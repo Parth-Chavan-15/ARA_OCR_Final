@@ -1,36 +1,47 @@
 import structlog
 from typing import List, Dict, Any
+from app.services.language import LanguageService
 
 logger = structlog.get_logger(__name__)
+
 
 class EvidenceService:
     INDICATORS = {
         "CASTE_CERTIFICATE": [
-            'caste certificate', 'जातीचा दाखला', 'जातीचे प्रमाणपत्र', 'form 6', 'form 7', 'form 8',
-            'form-6', 'form-7', 'form-8', 'tehsildar', 'tahsildar', 'sub-divisional officer',
-            'certificate to be produced by', 'produced by other backward classes', 'produced by scheduled castes'
+            "caste certificate", "जातीचा दाखला", "जातीचे प्रमाणपत्र", "form 6", "form 7", "form 8",
+            "form-6", "form-7", "form-8", "tehsildar", "tahsildar", "sub-divisional officer",
+            "certificate to be produced by", "produced by other backward classes",
+            "produced by scheduled castes", "सक्षम प्राधिकारी", "महाराष्ट्र शासन",
+            "प्रपत्र ६", "प्रपत्र ७", "प्रपत्र ८", "उपविभागीय अधिकारी", "मागास प्रवर्ग"
         ],
         "CASTE_VALIDITY_CERTIFICATE": [
-            'certificate of validity', 'validity certificate', 'जात वैधता', 'जात वैधता प्रमाणपत्र',
-            'form 15', 'form-15', 'प्रपत्र १५', 'claim is held valid', 'claim is valid',
-            'district caste certificate scrutiny committee', 'scrutiny committee'
+            "certificate of validity", "validity certificate", "जात वैधता", "जात वैधता प्रमाणपत्र",
+            "form 15", "form-15", "प्रपत्र १५", "प्रपत्र 15", "claim is held valid", "claim is valid",
+            "district caste certificate scrutiny committee", "scrutiny committee",
+            "जात प्रमाणपत्र पडताळणी समिती", "पडताळणी समिती", "वैधता प्रमाणपत्र"
         ],
         "CASTE_VALIDITY_RECEIPT": [
-            'receipt', 'acknowledgement receipt', 'application with supporting documents receipt',
-            'receipt no', 'receipt no.', 'transaction ref', 'online submitted application'
+            "receipt", "acknowledgement receipt", "application with supporting documents receipt",
+            "receipt no", "receipt no.", "transaction ref", "online submitted application",
+            "पावती", "पोचपावती", "अर्ज पावती", "कागदपत्रे सादर केल्याची पावती",
+            "पडताळणी समिती पावती", "अर्ज क्रमांक"
         ],
         "PROFORMA_O": [
-            'proforma-o', 'proforma -o', 'proforma o', 'proforma-0', 'proforma 0',
-            'प्रपत्र-ओ', 'प्रपत्र ओ', 'minority community student', 'self declaration for minority'
+            "proforma-o", "proforma -o", "proforma o", "proforma-0", "proforma 0",
+            "प्रपत्र-ओ", "प्रपत्र ओ", "minority community student", "self declaration for minority",
+            "अल्पसंख्याक समुदाय विद्यार्थी", "स्वयंघोषणापत्र", "धार्मिक / भाषिक अल्पसंख्याक"
         ],
         "LEAVING_CERTIFICATE": [
-            'leaving certificate', 'school leaving', 'college leaving', 'transfer certificate',
-            'lc no', 'lc no.', 'general register', 'name of the pupil', 'शाळा सोडल्याचा दाखला'
+            "leaving certificate", "school leaving", "college leaving", "transfer certificate",
+            "lc no", "lc no.", "general register", "name of the pupil",
+            "शाळा सोडल्याचा दाखला", "महाविद्यालय सोडल्याचा दाखला", "स्थानांतरण प्रमाणपत्र",
+            "विद्यार्थ्याचे नाव", "जनरल रजिस्टर"
         ],
         "UNKNOWN_OUT_OF_SCOPE": [
-            'non creamy layer', 'non-creamy layer', 'ncl', 'income certificate',
-            'domicile certificate', 'nationality', 'admission form', 'application form',
-            'state common entrance test cell', 'cap round', 'cap allotment'
+            "non creamy layer", "non-creamy layer", "ncl", "income certificate",
+            "domicile certificate", "nationality", "admission form", "application form",
+            "state common entrance test cell", "cap round", "cap allotment",
+            "नॉन क्रिमीलेअर", "उत्पन्नाचा दाखला", "अधिवास प्रमाणपत्र", "राष्ट्रीयत्व प्रमाणपत्र"
         ]
     }
 
@@ -43,27 +54,34 @@ class EvidenceService:
                 "summary": "No specific evidence found for UNKNOWN_OUT_OF_SCOPE class."
             }
 
-        keywords = EvidenceService.INDICATORS[predicted_class]
+        keywords = [LanguageService.normalize_text(kw).lower() for kw in EvidenceService.INDICATORS[predicted_class]]
         matched = set()
         evidence_items = []
 
         try:
-            full_text = " ".join(getattr(token, "text", "") for token in ocr_tokens).lower()
+            token_strings = [
+                LanguageService.normalize_text(getattr(token, "text", "")).lower()
+                for token in ocr_tokens
+            ]
+            full_text = " ".join(token_strings)
 
-            # First, check multi-word phrase occurrences in full concatenated text
+            # 1. Multi-word phrase occurrences in full concatenated text
             for kw in keywords:
                 if kw in full_text:
                     matched.add(kw)
 
-            # Next, match against individual tokens for bounding boxes
+            # 2. Match against individual tokens for bounding boxes
             for token in ocr_tokens:
-                text = getattr(token, "text", "")
-                text_lower = text.lower()
+                text_raw = getattr(token, "text", "")
+                text_norm = LanguageService.normalize_text(text_raw).lower()
+                if not text_norm:
+                    continue
+
                 for kw in keywords:
-                    if kw == text_lower or kw in text_lower or text_lower in kw:
+                    if kw == text_norm or kw in text_norm or (len(text_norm) >= 4 and text_norm in kw):
                         matched.add(kw)
                         evidence_items.append({
-                            "text": text,
+                            "text": text_raw,
                             "page_number": getattr(token, "page_number", 1),
                             "bbox": [
                                 getattr(token, "x1", 0.0),
@@ -72,6 +90,7 @@ class EvidenceService:
                                 getattr(token, "y2", 0.0)
                             ]
                         })
+                        break
 
             summary = f"Found {len(matched)} matching keywords for class {predicted_class}."
             return {

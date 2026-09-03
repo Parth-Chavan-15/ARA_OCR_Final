@@ -16,11 +16,10 @@ pydantic-settings==2.5.2
 # Environment
 python-dotenv==1.0.1
 
-# OCR — PaddleOCR (English + Marathi/Devanagari)
-# NOTE: For GPU support (RTX 4050), install paddlepaddle-gpu separately:
-#   pip install paddlepaddle-gpu -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
+# OCR — PaddleOCR + EasyOCR (English + Marathi/Devanagari)
 paddleocr>=2.7.0
 paddlepaddle>=2.6.0
+easyocr>=1.7.0
 
 # Image processing
 opencv-python-headless>=4.9.0
