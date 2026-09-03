@@ -15,11 +15,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from transformers import (
+    AutoTokenizer,
     LayoutLMv3Config,
     LayoutLMv3ForSequenceClassification,
     LayoutLMv3Processor,
+    LayoutLMv3ImageProcessor,
+    get_linear_schedule_with_warmup,
 )
 
 # Setup logging
@@ -41,7 +43,9 @@ CLASS_DIR_MAP = {
     "caste_validity_certificate": "CASTE_VALIDITY_CERTIFICATE",
     "caste_validity_receipt": "CASTE_VALIDITY_RECEIPT",
     "leaving_certificate": "LEAVING_CERTIFICATE",
+    "proforma": "PROFORMA_O",
     "proforma_o": "PROFORMA_O",
+    "ncl_certificate": "UNKNOWN_OUT_OF_SCOPE",
     "unknown_out_of_scope": "UNKNOWN_OUT_OF_SCOPE",
     "CASTE_CERTIFICATE": "CASTE_CERTIFICATE",
     "CASTE_VALIDITY_CERTIFICATE": "CASTE_VALIDITY_CERTIFICATE",
@@ -53,6 +57,9 @@ CLASS_DIR_MAP = {
 
 
 def extract_document_pages(file_path: Path) -> list[dict]:
+    """
+    Extract high-res page image, text words, and 0-1000 normalized bounding boxes.
+    """
     samples = []
     suffix = file_path.suffix.lower()
     student_id = file_path.stem.split('_')[0].split('-')[0].strip()
@@ -119,13 +126,29 @@ def extract_document_pages(file_path: Path) -> list[dict]:
     return samples
 
 
-def load_dataset(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> list[dict]:
+def load_dataset(primary_dir: Path, auxiliary_dirs: list[Path] = None, max_unknown_per_category: int = 4) -> list[dict]:
     all_samples = []
     logger.info(f"Loading primary dataset from {primary_dir}...")
 
     for item in sorted(primary_dir.iterdir()):
         if not item.is_dir():
             continue
+
+        if item.name == "sorted":
+            # Extract balanced out-of-scope samples from sorted subdirectories
+            for sub_cat in sorted(item.iterdir()):
+                if sub_cat.is_dir():
+                    cat_files = [f for f in sub_cat.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
+                    random.seed(42)
+                    selected_files = random.sample(cat_files, min(len(cat_files), max_unknown_per_category))
+                    for f in selected_files:
+                        doc_samples = extract_document_pages(f)
+                        for s in doc_samples:
+                            s["label"] = CLASS_MAP["UNKNOWN_OUT_OF_SCOPE"]
+                            s["class_name"] = "UNKNOWN_OUT_OF_SCOPE"
+                            all_samples.append(s)
+            continue
+
         cname = CLASS_DIR_MAP.get(item.name, item.name.upper())
         if cname not in CLASS_MAP:
             continue
@@ -138,6 +161,7 @@ def load_dataset(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> list[d
                 s["class_name"] = cname
                 all_samples.append(s)
 
+    # Auxiliary datasets to balance small classes (e.g. CASTE_VALIDITY_RECEIPT)
     if auxiliary_dirs:
         for aux_dir in auxiliary_dirs:
             if not aux_dir.exists():
@@ -150,7 +174,7 @@ def load_dataset(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> list[d
                     continue
 
                 current_count = sum(1 for s in all_samples if s["class_name"] == cname)
-                if current_count < 20:
+                if current_count < 25:
                     files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
                     for f in files:
                         doc_samples = extract_document_pages(f)
@@ -264,13 +288,20 @@ def train(args):
     if device.type == "cuda":
         logger.info(f"GPU: {torch.cuda.get_device_name(0)} | VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**2):.0f} MB")
 
-    from transformers import AutoTokenizer, LayoutLMv3ImageProcessor
     tokenizer = AutoTokenizer.from_pretrained("microsoft/layoutlmv3-base")
     image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
     processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
+    
+    # Configure label mapping in config
+    id2label = {i: name for i, name in enumerate(CLASS_NAMES)}
+    label2id = {name: i for i, name in enumerate(CLASS_NAMES)}
+
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         "microsoft/layoutlmv3-base",
-        num_labels=len(CLASS_NAMES)
+        num_labels=len(CLASS_NAMES),
+        id2label=id2label,
+        label2id=label2id,
+        ignore_mismatched_sizes=True,
     )
     model.to(device)
 
@@ -280,6 +311,7 @@ def train(args):
         return
 
     train_samples, test_samples = group_stratified_split(all_samples, train_ratio=args.train_split, seed=42)
+    logger.info(f"Split completed: Train={len(train_samples)} samples, Test={len(test_samples)} samples")
 
     train_loader = DataLoader(
         MultimodalDataset(train_samples, processor, max_seq_length=256),
@@ -298,19 +330,33 @@ def train(args):
 
     # Class weights for loss
     counts = Counter(s["label"] for s in train_samples)
-    weights = [min(8.0, max(1.0, float(np.sqrt(len(train_samples) / (len(CLASS_NAMES) * max(1, counts.get(i, 1))))))) for i in range(len(CLASS_NAMES))]
+    weights = [min(6.0, max(1.0, float(np.sqrt(len(train_samples) / (len(CLASS_NAMES) * max(1, counts.get(i, 1))))))) for i in range(len(CLASS_NAMES))]
     criterion = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float, device=device))
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    # Differential learning rates for backbone vs newly initialized classification head
+    backbone_params = [p for n, p in model.named_parameters() if "classifier" not in n]
+    classifier_params = [p for n, p in model.named_parameters() if "classifier" in n]
+
+    optimizer_grouped_parameters = [
+        {"params": backbone_params, "lr": args.learning_rate, "weight_decay": args.weight_decay},
+        {"params": classifier_params, "lr": args.learning_rate * 5.0, "weight_decay": 0.0},
+    ]
+
+    optimizer = AdamW(optimizer_grouped_parameters)
+    total_steps = len(train_loader) * args.epochs
+    warmup_steps = int(total_steps * 0.1)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
 
     use_amp = (device.type == "cuda")
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     best_macro_f1 = 0.0
     best_state = None
+    best_metrics = {}
 
-    logger.info(f"Starting training for {args.epochs} epochs with FP16 on {device}...")
+    logger.info(f"Starting training for {args.epochs} epochs with FP16 (warmup={warmup_steps} steps, total={total_steps} steps) on {device}...")
+    start_time = time.time()
+
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0.0
@@ -327,15 +373,16 @@ def train(args):
                 loss = criterion(outputs.logits, labels)
 
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
 
             train_loss += loss.item() * labels.size(0)
             preds = outputs.logits.argmax(dim=-1)
             train_correct += (preds == labels).sum().item()
             train_total += labels.size(0)
-
-        scheduler.step()
 
         # Validation
         model.eval()
@@ -358,22 +405,38 @@ def train(args):
 
         acc = test_correct / test_total if test_total else 0.0
         f1_scores = []
-        for i in range(len(CLASS_NAMES)):
+        class_details = {}
+        for i, name in enumerate(CLASS_NAMES):
             tp = sum(1 for p, t in zip(all_preds, all_labels) if p == i and t == i)
             fp = sum(1 for p, t in zip(all_preds, all_labels) if p == i and t != i)
             fn = sum(1 for p, t in zip(all_preds, all_labels) if p != i and t == i)
+            support = sum(1 for t in all_labels if t == i)
             prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
             f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
-            if sum(1 for t in all_labels if t == i) > 0:
+            if support > 0:
                 f1_scores.append(f1)
+            class_details[name] = {"precision": prec, "recall": rec, "f1": f1, "support": support}
 
         macro_f1 = np.mean(f1_scores) if f1_scores else 0.0
-        logger.info(f"Epoch {epoch+1:2d}/{args.epochs:2d} | Train Acc: {train_correct/train_total*100:.1f}% | Test Acc: {acc*100:.1f}% | Macro F1: {macro_f1*100:.1f}%")
+        logger.info(f"Epoch {epoch+1:2d}/{args.epochs:2d} | Train Acc: {train_correct/train_total*100:5.1f}% | Val Acc: {acc*100:5.1f}% | Macro F1: {macro_f1*100:5.1f}% | Loss: {train_loss/train_total:.4f}")
 
-        if macro_f1 > best_macro_f1:
+        if macro_f1 >= best_macro_f1:
             best_macro_f1 = macro_f1
             best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            best_metrics = {
+                "epoch": epoch + 1,
+                "accuracy": acc,
+                "macro_f1": macro_f1,
+                "class_details": class_details,
+            }
+
+    total_time = time.time() - start_time
+    logger.info(f"\n{'='*60}\nTRAINING COMPLETE in {total_time:.1f}s\n{'='*60}")
+    logger.info(f"Best Validation Macro F1: {best_metrics.get('macro_f1', 0)*100:.2f}% at Epoch {best_metrics.get('epoch', 1)}")
+    logger.info("Per-Class Performance on Validation Set:")
+    for name, m in best_metrics.get("class_details", {}).items():
+        logger.info(f"  {name:30s} | Prec: {m['precision']*100:5.1f}% | Rec: {m['recall']*100:5.1f}% | F1: {m['f1']*100:5.1f}% | Samples: {m['support']}")
 
     if best_state:
         out_dir = Path(args.output_dir)
@@ -381,16 +444,17 @@ def train(args):
         model.load_state_dict(best_state)
         model.save_pretrained(str(out_dir))
         processor.save_pretrained(str(out_dir))
-        logger.info(f"✓ Best model saved to {out_dir} (Macro F1: {best_macro_f1*100:.2f}%)")
+        logger.info(f"\n✓ Best model successfully saved to {out_dir}\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-tune LayoutLMv3 on Document Dataset")
-    parser.add_argument("--data_dir", type=str, default="new_training_data", help="Primary dataset directory")
+    parser.add_argument("--data_dir", type=str, default="../DATA", help="Primary dataset directory")
     parser.add_argument("--auxiliary_dirs", nargs="*", default=["data/demo", "data/originals"], help="Auxiliary balance datasets")
     parser.add_argument("--output_dir", type=str, default="models/layoutxlm", help="Output directory")
-    parser.add_argument("--epochs", type=int, default=10, help="Epochs")
+    parser.add_argument("--epochs", type=int, default=12, help="Epochs")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
-    parser.add_argument("--learning_rate", type=float, default=4e-5, help="Learning rate")
+    parser.add_argument("--learning_rate", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--train_split", type=float, default=0.7, help="Train split ratio")
     args = parser.parse_args()
