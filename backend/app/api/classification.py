@@ -171,12 +171,18 @@ def run_classification_pipeline(
             predicted_class=class_output.predicted_class,
             ocr_tokens=ocr_result.tokens,
         )
-        # Add probability breakdown to evidence
+        # Add probability breakdown and dual confidence metrics to evidence
         evidence["class_probabilities"] = class_output.all_probabilities
+        evidence["raw_probabilities"] = class_output.raw_probabilities
+        evidence["raw_confidence"] = class_output.raw_confidence
+        evidence["hybrid_floor"] = class_output.confidence
+        evidence["rule_applied"] = class_output.rule_applied
+        evidence["confidence_label"] = class_output.confidence_label
         stages.append(_stage("evidence_generation", "COMPLETED"))
 
         # ── Stage 9: Persist classification result (§21) ──
         stages.append(_stage("persist_result", "STARTED"))
+        db.query(ClassificationResult).filter(ClassificationResult.document_id == document.document_id).delete()
         classification_record = ClassificationResult(
             id=str(uuid.uuid4()),
             document_id=document.document_id,
@@ -196,11 +202,29 @@ def run_classification_pipeline(
         db.commit()
         stages.append(_stage("persist_result", "COMPLETED"))
 
+        try:
+            from app.api.ws import broadcast_sync
+            broadcast_sync({
+                "event": "document_classified",
+                "document_id": document.document_id,
+                "candidate_id": document.candidate_id,
+                "predicted_class": class_output.predicted_class,
+                "confidence": class_output.confidence,
+                "raw_confidence": class_output.raw_confidence,
+                "rule_applied": class_output.rule_applied,
+                "confidence_label": class_output.confidence_label,
+                "status": document.status,
+            })
+        except Exception:
+            pass
+
         logger.info(
             "classification_pipeline_completed",
             document_id=document.document_id,
             predicted_class=class_output.predicted_class,
             confidence=f"{class_output.confidence:.4f}",
+            raw_confidence=f"{class_output.raw_confidence:.4f}",
+            confidence_label=class_output.confidence_label,
         )
 
         return ClassifyResponse(
@@ -208,6 +232,9 @@ def run_classification_pipeline(
             status="SUCCESS",
             predicted_class=class_output.predicted_class,
             confidence=class_output.confidence,
+            raw_confidence=class_output.raw_confidence,
+            rule_applied=class_output.rule_applied,
+            confidence_label=class_output.confidence_label,
             language=language,
             ocr_confidence=ocr_result.overall_confidence,
             evidence=evidence,

@@ -1,10 +1,10 @@
 {
-  "benchmark_title": "ARA OCR LayoutLMv3 Multimodal Sequence Classifier - Multi-Run GPU Benchmark",
-  "device": "cuda:0",
-  "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU (6.00 GB VRAM)",
-  "total_dataset_size": 472,
-  "train_samples": 345,
-  "test_samples": 127,
+  "benchmark_timestamp": "2026-09-04 11:55:19",
+  "compute_device": "cuda:0",
+  "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "total_dataset_size": 741,
+  "train_samples": 528,
+  "test_samples": 213,
   "classes": [
     "CASTE_CERTIFICATE",
     "CASTE_VALIDITY_CERTIFICATE",
@@ -15,76 +15,686 @@
   ],
   "experiments": [
     {
-      "run_id": 1,
-      "name": "Standard Baseline (Uniform Weights)",
+      "run_id": 3,
+      "name": "Regularized Weighted (Dropout 0.15, LR 2e-5)",
       "hyperparameters": {
-        "learning_rate": 3e-05,
-        "weight_decay": 0.01,
+        "name": "Regularized Weighted (Dropout 0.15, LR 2e-5)",
+        "learning_rate": 2e-05,
+        "weight_decay": 0.03,
+        "dropout": 0.15,
         "epochs": 6,
         "batch_size": 4,
-        "scheduler": "none"
+        "use_class_weights": true,
+        "scheduler": "cosine"
       },
-      "best_accuracy": 93.7,
-      "best_macro_f1": 61.92,
-      "best_weighted_f1": 93.3,
-      "training_time_seconds": 230.3
+      "composite_score": 81.27,
+      "best_accuracy": 91.55,
+      "best_weighted_f1": 90.37,
+      "best_macro_f1": 60.04,
+      "ood_f1": 91.72,
+      "training_time_seconds": 364.3,
+      "per_class_metrics": {
+        "CASTE_CERTIFICATE": {
+          "precision": 50.0,
+          "recall": 33.33,
+          "f1": 40.0,
+          "support": 9
+        },
+        "CASTE_VALIDITY_CERTIFICATE": {
+          "precision": 97.35,
+          "recall": 100.0,
+          "f1": 98.65,
+          "support": 110
+        },
+        "CASTE_VALIDITY_RECEIPT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 2
+        },
+        "PROFORMA_O": {
+          "precision": 100.0,
+          "recall": 40.0,
+          "f1": 57.14,
+          "support": 5
+        },
+        "LEAVING_CERTIFICATE": {
+          "precision": 80.0,
+          "recall": 66.67,
+          "f1": 72.73,
+          "support": 12
+        },
+        "UNKNOWN_OUT_OF_SCOPE": {
+          "precision": 87.8,
+          "recall": 96.0,
+          "f1": 91.72,
+          "support": 75
+        }
+      },
+      "confusion_matrix": [
+        [
+          3,
+          0,
+          0,
+          0,
+          2,
+          4
+        ],
+        [
+          0,
+          110,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ],
+        [
+          2,
+          0,
+          0,
+          2,
+          0,
+          1
+        ],
+        [
+          0,
+          1,
+          0,
+          0,
+          8,
+          3
+        ],
+        [
+          1,
+          2,
+          0,
+          0,
+          0,
+          72
+        ]
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.722,
+          "train_acc": 83.14,
+          "test_loss": 0.5257,
+          "test_acc": 82.16,
+          "macro_f1": 44.47,
+          "weighted_f1": 81.02
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.4852,
+          "train_acc": 90.72,
+          "test_loss": 0.4695,
+          "test_acc": 81.22,
+          "macro_f1": 46.55,
+          "weighted_f1": 82.16
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.3043,
+          "train_acc": 92.99,
+          "test_loss": 0.4755,
+          "test_acc": 87.32,
+          "macro_f1": 54.62,
+          "weighted_f1": 86.26
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.1869,
+          "train_acc": 96.78,
+          "test_loss": 0.374,
+          "test_acc": 89.67,
+          "macro_f1": 58.06,
+          "weighted_f1": 88.87
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.0955,
+          "train_acc": 99.24,
+          "test_loss": 0.3782,
+          "test_acc": 90.61,
+          "macro_f1": 59.03,
+          "weighted_f1": 89.65
+        },
+        {
+          "epoch": 6,
+          "train_loss": 0.0657,
+          "train_acc": 99.43,
+          "test_loss": 0.3637,
+          "test_acc": 91.55,
+          "macro_f1": 60.04,
+          "weighted_f1": 90.37
+        }
+      ],
+      "checkpoint_dir": "models\\experiments\\run_3"
     },
     {
       "run_id": 2,
-      "name": "Inverse Class-Weighted CrossEntropy",
+      "name": "Cosine Annealing Fine-Tuning (LR 3e-5)",
       "hyperparameters": {
-        "learning_rate": 4e-05,
-        "weight_decay": 0.01,
+        "name": "Cosine Annealing Fine-Tuning (LR 3e-5)",
+        "learning_rate": 3e-05,
+        "weight_decay": 0.02,
         "epochs": 6,
         "batch_size": 4,
-        "scheduler": "none"
-      },
-      "best_accuracy": 85.83,
-      "best_macro_f1": 15.4,
-      "best_weighted_f1": 79.3,
-      "training_time_seconds": 228.7
-    },
-    {
-      "run_id": 3,
-      "name": "Class-Weighted with Cosine Annealing",
-      "hyperparameters": {
-        "learning_rate": 5e-05,
-        "weight_decay": 0.02,
-        "epochs": 10,
-        "batch_size": 4,
+        "use_class_weights": true,
         "scheduler": "cosine"
       },
-      "best_accuracy": 92.13,
-      "best_macro_f1": 27.97,
-      "best_weighted_f1": 91.2,
-      "training_time_seconds": 380.9
+      "composite_score": 77.34,
+      "best_accuracy": 89.67,
+      "best_weighted_f1": 88.16,
+      "best_macro_f1": 52.1,
+      "ood_f1": 88.75,
+      "training_time_seconds": 359.0,
+      "per_class_metrics": {
+        "CASTE_CERTIFICATE": {
+          "precision": 71.43,
+          "recall": 55.56,
+          "f1": 62.5,
+          "support": 9
+        },
+        "CASTE_VALIDITY_CERTIFICATE": {
+          "precision": 97.32,
+          "recall": 99.09,
+          "f1": 98.2,
+          "support": 110
+        },
+        "CASTE_VALIDITY_RECEIPT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 2
+        },
+        "PROFORMA_O": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 5
+        },
+        "LEAVING_CERTIFICATE": {
+          "precision": 85.71,
+          "recall": 50.0,
+          "f1": 63.16,
+          "support": 12
+        },
+        "UNKNOWN_OUT_OF_SCOPE": {
+          "precision": 83.53,
+          "recall": 94.67,
+          "f1": 88.75,
+          "support": 75
+        }
+      },
+      "confusion_matrix": [
+        [
+          5,
+          0,
+          0,
+          0,
+          1,
+          3
+        ],
+        [
+          0,
+          109,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          1,
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0,
+          0,
+          0,
+          4
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          6,
+          6
+        ],
+        [
+          0,
+          2,
+          0,
+          2,
+          0,
+          71
+        ]
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.7656,
+          "train_acc": 79.73,
+          "test_loss": 0.5939,
+          "test_acc": 82.16,
+          "macro_f1": 37.61,
+          "weighted_f1": 79.38
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.5389,
+          "train_acc": 85.98,
+          "test_loss": 0.6788,
+          "test_acc": 76.53,
+          "macro_f1": 37.08,
+          "weighted_f1": 77.39
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.6555,
+          "train_acc": 81.25,
+          "test_loss": 0.4078,
+          "test_acc": 87.79,
+          "macro_f1": 47.06,
+          "weighted_f1": 85.47
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.2511,
+          "train_acc": 94.13,
+          "test_loss": 0.4094,
+          "test_acc": 88.73,
+          "macro_f1": 48.37,
+          "weighted_f1": 86.97
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.123,
+          "train_acc": 98.3,
+          "test_loss": 0.3684,
+          "test_acc": 88.73,
+          "macro_f1": 48.13,
+          "weighted_f1": 87.16
+        },
+        {
+          "epoch": 6,
+          "train_loss": 0.0862,
+          "train_acc": 99.24,
+          "test_loss": 0.3861,
+          "test_acc": 89.67,
+          "macro_f1": 52.1,
+          "weighted_f1": 88.16
+        }
+      ],
+      "checkpoint_dir": "models\\experiments\\run_2"
     },
     {
       "run_id": 4,
-      "name": "Regularized Weighted (Dropout 0.2 + Cosine)",
+      "name": "Extended Cosine Schedule (LR 3.5e-5)",
       "hyperparameters": {
-        "learning_rate": 2.5e-05,
-        "weight_decay": 0.05,
-        "dropout": 0.2,
-        "epochs": 6,
+        "name": "Extended Cosine Schedule (LR 3.5e-5)",
+        "learning_rate": 3.5e-05,
+        "weight_decay": 0.02,
+        "epochs": 8,
         "batch_size": 4,
+        "use_class_weights": true,
         "scheduler": "cosine"
       },
-      "best_accuracy": 96.85,
-      "best_macro_f1": 75.7,
-      "best_weighted_f1": 96.5,
-      "training_time_seconds": 228.0,
-      "is_champion": true
+      "composite_score": 75.95,
+      "best_accuracy": 87.32,
+      "best_weighted_f1": 85.77,
+      "best_macro_f1": 53.03,
+      "ood_f1": 85.71,
+      "training_time_seconds": 480.7,
+      "per_class_metrics": {
+        "CASTE_CERTIFICATE": {
+          "precision": 50.0,
+          "recall": 33.33,
+          "f1": 40.0,
+          "support": 9
+        },
+        "CASTE_VALIDITY_CERTIFICATE": {
+          "precision": 94.69,
+          "recall": 97.27,
+          "f1": 95.96,
+          "support": 110
+        },
+        "CASTE_VALIDITY_RECEIPT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 2
+        },
+        "PROFORMA_O": {
+          "precision": 100.0,
+          "recall": 20.0,
+          "f1": 33.33,
+          "support": 5
+        },
+        "LEAVING_CERTIFICATE": {
+          "precision": 85.71,
+          "recall": 50.0,
+          "f1": 63.16,
+          "support": 12
+        },
+        "UNKNOWN_OUT_OF_SCOPE": {
+          "precision": 80.23,
+          "recall": 92.0,
+          "f1": 85.71,
+          "support": 75
+        }
+      },
+      "confusion_matrix": [
+        [
+          3,
+          0,
+          0,
+          0,
+          1,
+          5
+        ],
+        [
+          0,
+          107,
+          0,
+          0,
+          0,
+          3
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ],
+        [
+          2,
+          0,
+          0,
+          1,
+          0,
+          2
+        ],
+        [
+          0,
+          1,
+          0,
+          0,
+          6,
+          5
+        ],
+        [
+          1,
+          5,
+          0,
+          0,
+          0,
+          69
+        ]
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.888,
+          "train_acc": 75.57,
+          "test_loss": 0.7007,
+          "test_acc": 79.34,
+          "macro_f1": 43.7,
+          "weighted_f1": 76.98
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.6203,
+          "train_acc": 84.66,
+          "test_loss": 0.5425,
+          "test_acc": 80.28,
+          "macro_f1": 44.09,
+          "weighted_f1": 79.91
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.3866,
+          "train_acc": 90.72,
+          "test_loss": 0.4761,
+          "test_acc": 82.63,
+          "macro_f1": 50.0,
+          "weighted_f1": 83.74
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.1942,
+          "train_acc": 95.83,
+          "test_loss": 0.4553,
+          "test_acc": 87.32,
+          "macro_f1": 53.03,
+          "weighted_f1": 85.77
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.0905,
+          "train_acc": 99.24,
+          "test_loss": 0.4915,
+          "test_acc": 85.45,
+          "macro_f1": 46.79,
+          "weighted_f1": 84.69
+        },
+        {
+          "epoch": 6,
+          "train_loss": 0.0404,
+          "train_acc": 99.62,
+          "test_loss": 0.4666,
+          "test_acc": 87.79,
+          "macro_f1": 46.94,
+          "weighted_f1": 85.49
+        },
+        {
+          "epoch": 7,
+          "train_loss": 0.0236,
+          "train_acc": 100.0,
+          "test_loss": 0.4372,
+          "test_acc": 88.26,
+          "macro_f1": 48.38,
+          "weighted_f1": 86.87
+        },
+        {
+          "epoch": 8,
+          "train_loss": 0.0189,
+          "train_acc": 100.0,
+          "test_loss": 0.4376,
+          "test_acc": 88.26,
+          "macro_f1": 48.38,
+          "weighted_f1": 86.87
+        }
+      ],
+      "checkpoint_dir": "models\\experiments\\run_4"
+    },
+    {
+      "run_id": 1,
+      "name": "Class-Weighted Fine-Tuning (LR 2.5e-5)",
+      "hyperparameters": {
+        "name": "Class-Weighted Fine-Tuning (LR 2.5e-5)",
+        "learning_rate": 2.5e-05,
+        "weight_decay": 0.01,
+        "epochs": 6,
+        "batch_size": 4,
+        "use_class_weights": true,
+        "scheduler": "none"
+      },
+      "composite_score": 75.1,
+      "best_accuracy": 85.92,
+      "best_weighted_f1": 85.15,
+      "best_macro_f1": 51.65,
+      "ood_f1": 82.89,
+      "training_time_seconds": 361.2,
+      "per_class_metrics": {
+        "CASTE_CERTIFICATE": {
+          "precision": 30.77,
+          "recall": 44.44,
+          "f1": 36.36,
+          "support": 9
+        },
+        "CASTE_VALIDITY_CERTIFICATE": {
+          "precision": 95.61,
+          "recall": 99.09,
+          "f1": 97.32,
+          "support": 110
+        },
+        "CASTE_VALIDITY_RECEIPT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 2
+        },
+        "PROFORMA_O": {
+          "precision": 100.0,
+          "recall": 20.0,
+          "f1": 33.33,
+          "support": 5
+        },
+        "LEAVING_CERTIFICATE": {
+          "precision": 75.0,
+          "recall": 50.0,
+          "f1": 60.0,
+          "support": 12
+        },
+        "UNKNOWN_OUT_OF_SCOPE": {
+          "precision": 81.82,
+          "recall": 84.0,
+          "f1": 82.89,
+          "support": 75
+        }
+      },
+      "confusion_matrix": [
+        [
+          4,
+          0,
+          0,
+          0,
+          1,
+          4
+        ],
+        [
+          0,
+          109,
+          0,
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ],
+        [
+          2,
+          0,
+          0,
+          1,
+          0,
+          2
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          6,
+          6
+        ],
+        [
+          7,
+          5,
+          0,
+          0,
+          0,
+          63
+        ]
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.7536,
+          "train_acc": 80.87,
+          "test_loss": 0.4768,
+          "test_acc": 84.51,
+          "macro_f1": 40.7,
+          "weighted_f1": 81.76
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.4795,
+          "train_acc": 90.15,
+          "test_loss": 0.477,
+          "test_acc": 87.32,
+          "macro_f1": 48.24,
+          "weighted_f1": 84.41
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.5068,
+          "train_acc": 87.5,
+          "test_loss": 0.5973,
+          "test_acc": 76.53,
+          "macro_f1": 45.72,
+          "weighted_f1": 77.97
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.3658,
+          "train_acc": 92.05,
+          "test_loss": 0.5823,
+          "test_acc": 76.53,
+          "macro_f1": 41.66,
+          "weighted_f1": 79.07
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.1739,
+          "train_acc": 96.97,
+          "test_loss": 0.4314,
+          "test_acc": 85.92,
+          "macro_f1": 51.65,
+          "weighted_f1": 85.15
+        },
+        {
+          "epoch": 6,
+          "train_loss": 0.0782,
+          "train_acc": 98.48,
+          "test_loss": 0.7025,
+          "test_acc": 79.34,
+          "macro_f1": 44.01,
+          "weighted_f1": 78.57
+        }
+      ],
+      "checkpoint_dir": "models\\experiments\\run_1"
     }
   ],
-  "champion_run": {
-    "run_id": 4,
-    "name": "Regularized Weighted (Dropout 0.2 + Cosine)",
-    "best_test_accuracy": 96.85,
-    "best_macro_f1": 75.7,
-    "best_weighted_f1": 96.5,
-    "final_test_loss": 0.1133,
-    "checkpoint_directory": "models/experiments/run_4",
-    "deployed_to": "models/layoutxlm"
-  }
+  "best_run_id": 3,
+  "best_run_name": "Regularized Weighted (Dropout 0.15, LR 2e-5)",
+  "best_composite_score": 81.27,
+  "best_weighted_f1": 90.37,
+  "best_macro_f1": 60.04,
+  "ood_f1": 91.72,
+  "best_accuracy": 91.55
 }

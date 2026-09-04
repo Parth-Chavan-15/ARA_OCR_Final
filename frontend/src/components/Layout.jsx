@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import { createWebSocketClient } from '../services/api';
 
 const Layout = () => {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -9,6 +10,18 @@ const Layout = () => {
   const handleSyncComplete = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  useEffect(() => {
+    // Connect WebSocket for live real-time state sync across all pages
+    const cleanupWs = createWebSocketClient((data) => {
+      console.log('Live Scrutiny Event received via WebSocket:', data);
+      setRefreshTrigger(prev => prev + 1);
+    });
+
+    return () => {
+      if (cleanupWs) cleanupWs();
+    };
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#F4F6F9]">

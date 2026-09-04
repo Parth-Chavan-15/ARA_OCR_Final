@@ -32,6 +32,9 @@ class DocumentResponse(BaseModel):
     document_type: Optional[str] = None
     status: str
     uploaded_at: datetime
+    confidence: Optional[float] = None
+    raw_confidence: Optional[float] = None
+    confidence_label: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

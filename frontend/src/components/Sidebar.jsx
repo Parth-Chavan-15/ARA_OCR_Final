@@ -85,18 +85,26 @@ const Sidebar = () => {
             <Sparkles size={14} />
             <span>AI Verification Model</span>
           </div>
-          <div className="space-y-1 text-slate-300 text-[10px]">
+          <div className="space-y-1.5 text-slate-300 text-[10px]">
             <div className="flex justify-between">
               <span className="text-slate-400">Architecture:</span>
               <span className="font-mono text-amber-300">LayoutLMv3</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Test Accuracy:</span>
-              <span className="font-bold text-emerald-400">80.00%</span>
+              <span className="font-bold text-emerald-400">91.55%</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">OOD F1 Score:</span>
+              <span className="font-bold text-sky-400">91.72%</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Trained Dataset:</span>
+              <span className="font-medium text-slate-200">741 Docs (6 Classes)</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">OCR Engine:</span>
-              <span className="font-medium text-slate-200">PaddleOCR (Cache)</span>
+              <span className="font-medium text-slate-200">PaddleOCR (GPU)</span>
             </div>
           </div>
         </div>

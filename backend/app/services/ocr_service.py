@@ -1,4 +1,5 @@
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import fitz

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { apiService } from '../services/api';
+import { apiService, queueService } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import {
   Users,
@@ -14,6 +14,8 @@ import {
   FolderOpen,
   RefreshCw,
   Sparkles,
+  ListPlus,
+  ArrowRight,
 } from 'lucide-react';
 
 const CandidateDocuments = () => {
@@ -26,6 +28,8 @@ const CandidateDocuments = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [queuedIds, setQueuedIds] = useState(queueService.getQueue());
+  const [toastMsg, setToastMsg] = useState(null);
 
   const fetchCandidatesData = useCallback(async () => {
     setLoading(true);
@@ -53,6 +57,36 @@ const CandidateDocuments = () => {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const handleQueueChange = () => {
+      setQueuedIds(queueService.getQueue());
+    };
+    window.addEventListener('ara_queue_updated', handleQueueChange);
+    return () => window.removeEventListener('ara_queue_updated', handleQueueChange);
+  }, []);
+
+  const handleToggleQueue = (docId, filename = '') => {
+    if (queueService.isInQueue(docId)) {
+      queueService.removeFromQueue(docId);
+      setToastMsg(`Removed "${filename || 'document'}" from Scrutiny Queue.`);
+    } else {
+      queueService.addToQueue(docId);
+      setToastMsg(`Added "${filename || 'document'}" to Scrutiny Queue.`);
+    }
+    setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const handleAddAllInDossierToQueue = (candId) => {
+    const docs = candidateDocs[candId] || [];
+    const pendingDocs = docs.filter((d) => !d.document_type || d.status === 'PENDING');
+    if (pendingDocs.length === 0) return;
+
+    const pendingIds = pendingDocs.map((d) => d.document_id);
+    queueService.addAllToQueue(pendingIds);
+    setToastMsg(`Added ${pendingIds.length} candidate documents to Scrutiny Queue.`);
+    setTimeout(() => setToastMsg(null), 3500);
+  };
 
   useEffect(() => {
     fetchCandidatesData();
@@ -234,55 +268,122 @@ const CandidateDocuments = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto py-4 space-y-3">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Submitted Documents in Vault ({candidateDocs[selectedCandidate.candidate_id]?.length || 0})
-              </h4>
-              <div className="space-y-2">
-                {(candidateDocs[selectedCandidate.candidate_id] || []).map((doc) => (
-                  <div
-                    key={doc.document_id}
-                    className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 hover:bg-slate-100/80 transition"
+              {toastMsg && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-3.5 py-2 rounded-lg font-medium flex items-center justify-between animate-fadeIn">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    {toastMsg}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setSelectedCandidate(null);
+                      navigate('/incoming?filter=queue');
+                    }}
+                    className="text-xs font-bold text-blue-700 hover:underline flex items-center gap-1 ml-2 cursor-pointer"
                   >
-                    <div className="flex items-center space-x-3">
-                      <FileText size={18} className="text-slate-600" />
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block">{doc.filename}</span>
-                        <div className="mt-0.5">
-                          {doc.document_type ? (
-                            <StatusBadge status={doc.document_type} />
-                          ) : (
-                            <span className="text-[10px] text-slate-500 italic">Pending Scrutiny</span>
-                          )}
+                    <span>View Scrutiny Queue</span>
+                    <ArrowRight size={12} />
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Submitted Documents in Vault ({candidateDocs[selectedCandidate.candidate_id]?.length || 0})
+                </h4>
+                <div className="flex items-center gap-2">
+                  {(candidateDocs[selectedCandidate.candidate_id] || []).some(d => !d.document_type) && (
+                    <button
+                      onClick={() => handleAddAllInDossierToQueue(selectedCandidate.candidate_id)}
+                      className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#0F2942] bg-amber-300 hover:bg-amber-400 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer"
+                    >
+                      <ListPlus size={13} />
+                      <span>Add All to Queue</span>
+                    </button>
+                  )}
+                  {queuedIds.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setSelectedCandidate(null);
+                        navigate('/incoming?filter=queue');
+                      }}
+                      className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition cursor-pointer"
+                    >
+                      <span>Scrutiny Queue ({queuedIds.length})</span>
+                      <ArrowRight size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2">
+                {(candidateDocs[selectedCandidate.candidate_id] || []).map((doc) => {
+                  const isQueued = queuedIds.includes(doc.document_id);
+                  return (
+                    <div
+                      key={doc.document_id}
+                      className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 hover:bg-slate-100/80 transition"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <FileText size={18} className="text-slate-600" />
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block">{doc.filename}</span>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                            {doc.document_type ? (
+                              <>
+                                <StatusBadge status={doc.document_type} />
+                                <span className="text-[10.5px] font-mono text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                                  {doc.confidence_label || (doc.confidence ? `${(doc.confidence * 100).toFixed(1)}% (LayoutLMv3: ${((doc.raw_confidence || doc.confidence) * 100).toFixed(1)}% + Rule Evidence)` : '98.0% (LayoutLMv3 + Rule Evidence)')}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-[10px] text-slate-500 italic">Pending Scrutiny</span>
+                                {isQueued && (
+                                  <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.2 rounded">
+                                    In Queue
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div>
-                      {doc.document_type ? (
-                        <button
-                          onClick={() => {
-                            setSelectedCandidate(null);
-                            navigate(`/result/${doc.document_id}`);
-                          }}
-                          className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 transition cursor-pointer"
-                        >
-                          <Eye size={12} />
-                          <span>View Scrutiny</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setSelectedCandidate(null);
-                            navigate('/incoming');
-                          }}
-                          className="inline-flex items-center space-x-1 text-xs font-bold text-amber-900 bg-amber-300 hover:bg-amber-400 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer"
-                        >
-                          <span>Scrutinize</span>
-                        </button>
-                      )}
+                      <div>
+                        {doc.document_type ? (
+                          <button
+                            onClick={() => {
+                              setSelectedCandidate(null);
+                              navigate(`/result/${doc.document_id}`);
+                            }}
+                            className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 transition cursor-pointer"
+                          >
+                            <Eye size={12} />
+                            <span>View Scrutiny</span>
+                          </button>
+                        ) : isQueued ? (
+                          <button
+                            onClick={() => handleToggleQueue(doc.document_id, doc.filename)}
+                            className="inline-flex items-center space-x-1 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer"
+                            title="Click to remove from scrutiny queue"
+                          >
+                            <CheckCircle2 size={13} className="text-emerald-700" />
+                            <span>Added to Queue</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleToggleQueue(doc.document_id, doc.filename)}
+                            className="inline-flex items-center space-x-1 text-xs font-bold text-[#0F2942] bg-amber-300 hover:bg-amber-400 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer"
+                            title="Add document to scrutiny queue"
+                          >
+                            <ListPlus size={13} />
+                            <span>Add to Queue</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

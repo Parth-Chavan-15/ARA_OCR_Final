@@ -51,6 +51,24 @@ class Document(Base):
         "ClassificationResult", back_populates="document", lazy="selectin"
     )
 
+    @property
+    def confidence(self) -> float | None:
+        if self.classification_results:
+            return self.classification_results[-1].confidence
+        return None
+
+    @property
+    def raw_confidence(self) -> float | None:
+        if self.classification_results and isinstance(self.classification_results[-1].evidence, dict):
+            return self.classification_results[-1].evidence.get("raw_confidence")
+        return None
+
+    @property
+    def confidence_label(self) -> str | None:
+        if self.classification_results and isinstance(self.classification_results[-1].evidence, dict):
+            return self.classification_results[-1].evidence.get("confidence_label")
+        return None
+
     def __repr__(self) -> str:
         return (
             f"<Document {self.document_id} "

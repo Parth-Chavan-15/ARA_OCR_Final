@@ -83,7 +83,15 @@ def extract_document_pages(file_path: Path) -> list[dict]:
     suffix = file_path.suffix.lower()
     student_id = file_path.stem.split('_')[0].split('-')[0].strip()
 
-    if suffix == ".pdf":
+    is_pdf = (suffix == ".pdf")
+    try:
+        with open(file_path, "rb") as test_f:
+            if test_f.read(4).startswith(b"%PDF"):
+                is_pdf = True
+    except Exception:
+        pass
+
+    if is_pdf:
         try:
             doc = fitz.open(str(file_path))
             for page_idx in range(len(doc)):
@@ -101,11 +109,13 @@ def extract_document_pages(file_path: Path) -> list[dict]:
                     word_text = str(item[4]).strip()
                     if word_text:
                         x0, y0, x1, y1 = item[:4]
+                        bx0, by0 = min(x0, x1), min(y0, y1)
+                        bx1, by1 = max(x0, x1), max(y0, y1)
                         norm_box = [
-                            int(max(0, min(1000, (x0 / w) * 1000))),
-                            int(max(0, min(1000, (y0 / h) * 1000))),
-                            int(max(0, min(1000, (x1 / w) * 1000))),
-                            int(max(0, min(1000, (y1 / h) * 1000))),
+                            int(max(0, min(1000, (bx0 / w) * 1000))),
+                            int(max(0, min(1000, (by0 / h) * 1000))),
+                            int(max(0, min(1000, (bx1 / w) * 1000))),
+                            int(max(0, min(1000, (by1 / h) * 1000))),
                         ]
                         words.append(word_text)
                         boxes.append(norm_box)
@@ -315,7 +325,7 @@ class MultimodalDataset(Dataset):
 
 def compute_class_weights(train_samples: list[dict], device: torch.device) -> torch.Tensor:
     """
-    Computes smoothed inverse frequency weights to penalize minority class errors.
+    Computes inverse frequency weights to penalize minority class errors.
     """
     counts = Counter(s["label"] for s in train_samples)
     total = len(train_samples)
@@ -324,9 +334,9 @@ def compute_class_weights(train_samples: list[dict], device: torch.device) -> to
     weights = []
     for i in range(n_classes):
         c_count = counts.get(i, 1)
-        # Smoothed square-root inverse weighting capped at 8.0
-        w = np.sqrt(total / (n_classes * max(1, c_count)))
-        weights.append(min(8.0, max(1.0, float(w))))
+        # Direct inverse frequency weighting capped at 15.0
+        w = total / (n_classes * max(1, c_count))
+        weights.append(min(15.0, max(1.0, float(w))))
 
     weights_tensor = torch.tensor(weights, dtype=torch.float, device=device)
     logger.info(f"Computed Class Weights: {[round(w, 2) for w in weights]}")
@@ -397,9 +407,9 @@ def compute_metrics(y_true, y_pred):
     return per_class, macro_f1, weighted_f1, matrix.tolist()
 
 
-def run_experiment(run_id: int, config: dict, train_samples: list, test_samples: list, processor, device: torch.device):
+def run_experiment(run_id: int, config: dict, train_samples: list, test_samples: list, processor, device: torch.device, base_model: str = "microsoft/layoutlmv3-base"):
     """Runs a single fine-tuning experiment with mixed-precision on GPU."""
-    logger.info(f"\n{'='*70}\n[START] EXPERIMENT RUN {run_id}: {config['name']}\nHyperparameters: {config}\n{'='*70}")
+    logger.info(f"\n{'='*70}\n[START] EXPERIMENT RUN {run_id}: {config['name']}\nHyperparameters: {config}\nBase Model: {base_model}\n{'='*70}")
 
     train_dataset = MultimodalDataset(train_samples, processor, max_seq_length=256)
     test_dataset = MultimodalDataset(test_samples, processor, max_seq_length=256)
@@ -420,16 +430,18 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
     )
 
     # Initialize model
+    base_model_path = config.get("base_model", base_model)
     model_config = LayoutLMv3Config.from_pretrained(
-        "microsoft/layoutlmv3-base",
+        base_model_path,
         num_labels=len(CLASS_NAMES)
     )
     if "dropout" in config:
         model_config.classifier_dropout = config["dropout"]
 
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
-        "microsoft/layoutlmv3-base",
-        config=model_config
+        base_model_path,
+        config=model_config,
+        ignore_mismatched_sizes=True
     )
     model.to(device)
 
@@ -454,7 +466,9 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
     use_amp = (device.type == "cuda")
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
+    best_score = -1.0
     best_macro_f1 = -1.0
+    best_weighted_f1 = -1.0
     best_acc = 0.0
     best_metrics = {}
     best_matrix = []
@@ -515,8 +529,11 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
             "weighted_f1": round(weighted_f1 * 100, 2)
         })
 
-        # Track best checkpoint by Macro F1
-        if macro_f1 > best_macro_f1 or (macro_f1 == best_macro_f1 and test_acc > best_acc):
+        # Unified Composite selection: Weighted F1 (70%) + Macro F1 (30%)
+        composite_score = (weighted_f1 * 0.70) + (macro_f1 * 0.30)
+        if composite_score > best_score:
+            best_score = composite_score
+            best_weighted_f1 = weighted_f1
             best_macro_f1 = macro_f1
             best_acc = test_acc
             best_metrics = per_class
@@ -535,14 +552,18 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
         model.save_pretrained(str(run_dir))
         processor.save_pretrained(str(run_dir))
 
-    logger.info(f"✓ Run {run_id} Complete ({train_time}s) — Best Test Acc: {best_acc*100:.2f}%, Best Macro F1: {best_macro_f1*100:.2f}%")
+    ood_f1_score = best_metrics.get("UNKNOWN_OUT_OF_SCOPE", {}).get("f1", 0.0)
+    logger.info(f"✓ Run {run_id} Complete ({train_time}s) — Best Acc: {best_acc*100:.2f}%, Weighted F1: {best_weighted_f1*100:.2f}%, Macro F1: {best_macro_f1*100:.2f}%, OOD F1: {ood_f1_score}%")
 
     return {
         "run_id": run_id,
         "name": config["name"],
         "hyperparameters": config,
+        "composite_score": round(best_score * 100, 2),
         "best_accuracy": round(best_acc * 100, 2),
+        "best_weighted_f1": round(best_weighted_f1 * 100, 2),
         "best_macro_f1": round(best_macro_f1 * 100, 2),
+        "ood_f1": ood_f1_score,
         "training_time_seconds": train_time,
         "per_class_metrics": best_metrics,
         "confusion_matrix": best_matrix,
@@ -554,9 +575,10 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
 def main():
     parser = argparse.ArgumentParser(description="ARA OCR Multimodal Classifier Fine-Tuning Suite")
     parser.add_argument("--data_dir", type=str, default="new_training_data", help="Primary dataset directory")
-    parser.add_argument("--auxiliary_dirs", nargs="*", default=["training_data"], help="Auxiliary balance datasets")
+    parser.add_argument("--auxiliary_dirs", nargs="*", default=["training_data", "data/demo"], help="Auxiliary balance datasets")
     parser.add_argument("--output_dir", type=str, default="models/layoutxlm", help="Final model destination")
-    parser.add_argument("--epochs", type=int, default=8, help="Default epochs for training runs")
+    parser.add_argument("--base_model", type=str, default="models/layoutxlm_backup_pre_oos" if Path("models/layoutxlm_backup_pre_oos").exists() else "microsoft/layoutlmv3-base", help="Base model checkpoint to initialize from")
+    parser.add_argument("--epochs", type=int, default=6, help="Default epochs for training runs")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size (fits RTX 4050 6GB)")
     args = parser.parse_args()
 
@@ -565,10 +587,11 @@ def main():
     logger.info(f"Target Compute Device: {device}")
     if device.type == "cuda":
         logger.info(f"GPU: {torch.cuda.get_device_name(0)} | VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**2):.0f} MB")
+    logger.info(f"Base Model Initializer: {args.base_model}")
 
     # Load processor
     from transformers import AutoTokenizer, LayoutLMv3ImageProcessor
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/layoutlmv3-base")
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model if Path(args.base_model).exists() else "microsoft/layoutlmv3-base")
     image_processor = LayoutLMv3ImageProcessor(apply_ocr=False)
     processor = LayoutLMv3Processor(image_processor=image_processor, tokenizer=tokenizer)
 
@@ -584,20 +607,11 @@ def main():
     # Group Stratified Split
     train_samples, test_samples = group_stratified_split(all_samples, train_ratio=0.7, seed=42)
 
-    # Define 4 distinct experimental configurations
+    # Define 4 distinct experimental configurations fine-tuned from base checkpoint
     experiments = [
         {
-            "name": "Standard Baseline (Uniform Weights)",
-            "learning_rate": 3e-5,
-            "weight_decay": 0.01,
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "use_class_weights": False,
-            "scheduler": "none"
-        },
-        {
-            "name": "Inverse Class-Weighted CrossEntropy",
-            "learning_rate": 4e-5,
+            "name": "Class-Weighted Fine-Tuning (LR 2.5e-5)",
+            "learning_rate": 2.5e-5,
             "weight_decay": 0.01,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -605,20 +619,29 @@ def main():
             "scheduler": "none"
         },
         {
-            "name": "Class-Weighted with Cosine Annealing",
-            "learning_rate": 5e-5,
+            "name": "Cosine Annealing Fine-Tuning (LR 3e-5)",
+            "learning_rate": 3.0e-5,
             "weight_decay": 0.02,
-            "epochs": max(10, args.epochs + 2),
+            "epochs": args.epochs,
             "batch_size": args.batch_size,
             "use_class_weights": True,
             "scheduler": "cosine"
         },
         {
-            "name": "Regularized Weighted (Dropout 0.2)",
-            "learning_rate": 2.5e-5,
-            "weight_decay": 0.05,
-            "dropout": 0.2,
+            "name": "Regularized Weighted (Dropout 0.15, LR 2e-5)",
+            "learning_rate": 2.0e-5,
+            "weight_decay": 0.03,
+            "dropout": 0.15,
             "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "use_class_weights": True,
+            "scheduler": "cosine"
+        },
+        {
+            "name": "Extended Cosine Schedule (LR 3.5e-5)",
+            "learning_rate": 3.5e-5,
+            "weight_decay": 0.02,
+            "epochs": max(8, args.epochs + 2),
             "batch_size": args.batch_size,
             "use_class_weights": True,
             "scheduler": "cosine"
@@ -627,11 +650,11 @@ def main():
 
     results = []
     for idx, exp_config in enumerate(experiments, start=1):
-        res = run_experiment(idx, exp_config, train_samples, test_samples, processor, device)
+        res = run_experiment(idx, exp_config, train_samples, test_samples, processor, device, base_model=args.base_model)
         results.append(res)
 
-    # Rank and select best model based primarily on Macro F1
-    results.sort(key=lambda r: (r["best_macro_f1"], r["best_accuracy"]), reverse=True)
+    # Rank and select best model based on Composite Score: Weighted F1 (70%) + Macro F1 (30%)
+    results.sort(key=lambda r: (r.get("composite_score", 0), r["best_accuracy"]), reverse=True)
     best_run = results[0]
 
     report = {
@@ -645,7 +668,10 @@ def main():
         "experiments": results,
         "best_run_id": best_run["run_id"],
         "best_run_name": best_run["name"],
+        "best_composite_score": best_run.get("composite_score", 0),
+        "best_weighted_f1": best_run["best_weighted_f1"],
         "best_macro_f1": best_run["best_macro_f1"],
+        "ood_f1": best_run.get("ood_f1", 0),
         "best_accuracy": best_run["best_accuracy"]
     }
 
@@ -653,15 +679,15 @@ def main():
     with open("training_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
-    print("\n" + "="*80)
+    print("\n" + "="*95)
     print("[CHAMPION] MULTI-RUN BENCHMARK EXPERIMENT RESULTS SUMMARY")
-    print("="*80)
-    print(f"{'Run':<5} | {'Experiment Name':<42} | {'Accuracy':<10} | {'Macro F1':<10} | {'Time':<6}")
-    print("-" * 80)
+    print("="*95)
+    print(f"{'Run':<5} | {'Experiment Name':<38} | {'Composite':<10} | {'Weighted F1':<12} | {'Macro F1':<10} | {'OOD F1':<8} | {'Time':<6}")
+    print("-" * 95)
     for r in results:
         is_best = "* BEST" if r["run_id"] == best_run["run_id"] else ""
-        print(f"{r['run_id']:<5} | {r['name']:<42} | {r['best_accuracy']}%{'':<3} | {r['best_macro_f1']}%{'':<3} | {r['training_time_seconds']}s {is_best}")
-    print("=" * 80)
+        print(f"{r['run_id']:<5} | {r['name']:<38} | {r.get('composite_score', 0)}%{'':<3} | {r['best_weighted_f1']}%{'':<3} | {r['best_macro_f1']}%{'':<3} | {r.get('ood_f1', 0)}%{'':<2} | {r['training_time_seconds']}s {is_best}")
+    print("=" * 95)
 
     # Safely deploy best model checkpoint to models/layoutxlm/
     best_ckpt_dir = Path(best_run["checkpoint_dir"])

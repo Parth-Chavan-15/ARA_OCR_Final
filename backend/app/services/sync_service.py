@@ -163,13 +163,25 @@ def sync_disk_storage(db: Session) -> Dict[str, Any]:
             pruned_count += 1
             logger.info("pruned_missing_document", document_id=db_doc.document_id, file_path=db_doc.file_path)
 
-    if pruned_count > 0:
+    # Prune orphaned candidates who have 0 documents and no disk folder
+    all_candidates = db.query(Candidate).all()
+    pruned_candidates = 0
+    for cand in all_candidates:
+        doc_count = db.query(Document).filter(Document.candidate_id == cand.candidate_id).count()
+        cand_folder = originals_dir / cand.enrollment_number
+        if doc_count == 0 and not cand_folder.exists():
+            db.delete(cand)
+            pruned_candidates += 1
+            logger.info("pruned_empty_candidate", candidate_id=cand.candidate_id, enrollment=cand.enrollment_number)
+
+    if pruned_count > 0 or pruned_candidates > 0:
         db.commit()
 
     return {
         "status": "success",
         "candidates_added": candidates_added,
         "candidates_updated": candidates_updated,
+        "candidates_pruned": pruned_candidates,
         "documents_added": documents_added,
         "documents_updated": documents_updated,
         "documents_pruned": pruned_count,

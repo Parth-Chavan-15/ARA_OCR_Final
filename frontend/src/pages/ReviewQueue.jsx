@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import { apiService } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import { AlertTriangle, FileSearch, ArrowRight, ShieldAlert, RefreshCw, Eye } from 'lucide-react';
@@ -8,12 +8,10 @@ const ReviewQueue = () => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const context = useOutletContext();
+  const refreshTrigger = context?.refreshTrigger || 0;
 
-  useEffect(() => {
-    fetchReviewDocs();
-  }, []);
-
-  const fetchReviewDocs = async () => {
+  const fetchReviewDocs = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiService.getReviewDocuments();
@@ -23,7 +21,11 @@ const ReviewQueue = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchReviewDocs();
+  }, [fetchReviewDocs, refreshTrigger]);
 
   const getReason = (status) => {
     switch (status) {
@@ -125,7 +127,7 @@ const ReviewQueue = () => {
 
                 <div className="p-3 border-t border-slate-100 bg-slate-50">
                   <button
-                    onClick={() => navigate(/result/)}
+                    onClick={() => navigate(`/result/${docId}`)}
                     className="w-full flex items-center justify-center space-x-1.5 py-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 hover:bg-slate-100 transition cursor-pointer"
                   >
                     <Eye size={13} />

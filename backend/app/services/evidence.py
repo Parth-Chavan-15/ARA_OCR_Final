@@ -38,8 +38,8 @@ class EvidenceService:
             "विद्यार्थ्याचे नाव", "जनरल रजिस्टर"
         ],
         "UNKNOWN_OUT_OF_SCOPE": [
-            "non creamy layer", "non-creamy layer", "ncl", "income certificate",
-            "domicile certificate", "nationality", "admission form", "application form",
+            "non creamy layer", "non-creamy layer", "ncl certificate", "ncl no", "income certificate",
+            "domicile certificate", "certificate of nationality", "admission form", "application form",
             "state common entrance test cell", "cap round", "cap allotment",
             "नॉन क्रिमीलेअर", "उत्पन्नाचा दाखला", "अधिवास प्रमाणपत्र", "राष्ट्रीयत्व प्रमाणपत्र"
         ]
@@ -47,11 +47,11 @@ class EvidenceService:
 
     @staticmethod
     def generate_evidence(predicted_class: str, ocr_tokens: List[Any]) -> Dict[str, Any]:
-        if predicted_class == "UNKNOWN_OUT_OF_SCOPE" or predicted_class not in EvidenceService.INDICATORS:
+        if predicted_class not in EvidenceService.INDICATORS:
             return {
                 "matched_keywords": [],
                 "evidence_items": [],
-                "summary": "No specific evidence found for UNKNOWN_OUT_OF_SCOPE class."
+                "summary": f"No statutory criteria defined for class {predicted_class}."
             }
 
         keywords = [LanguageService.normalize_text(kw).lower() for kw in EvidenceService.INDICATORS[predicted_class]]
@@ -92,7 +92,13 @@ class EvidenceService:
                         })
                         break
 
-            summary = f"Found {len(matched)} matching keywords for class {predicted_class}."
+            if predicted_class == "UNKNOWN_OUT_OF_SCOPE":
+                if matched:
+                    summary = f"Flagged as Out-of-Scope: Identified non-target statutory markers: {', '.join(sorted(list(matched))[:3])}."
+                else:
+                    summary = "Flagged as Out-of-Scope: No authorized Maharashtra State CET reservation certificate criteria met."
+            else:
+                summary = f"Verified {len(matched)} statutory criteria for {predicted_class}."
             return {
                 "matched_keywords": sorted(list(matched)),
                 "evidence_items": evidence_items,

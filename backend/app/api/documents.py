@@ -39,6 +39,11 @@ def sync_documents(db: Session = Depends(get_db)):
     """Synchronize candidates and documents from disk storage (data/originals/)."""
     try:
         result = sync_disk_storage(db)
+        try:
+            from app.api.ws import broadcast_sync
+            broadcast_sync({"event": "storage_synced", "data": result})
+        except Exception:
+            pass
         return result
     except Exception as e:
         logger.error("sync_failed", error=str(e))
@@ -70,6 +75,12 @@ def reset_all_scrutiny(db: Session = Depends(get_db)):
 
         # Re-sync disk storage to ensure all files are registered
         sync_result = sync_disk_storage(db)
+
+        try:
+            from app.api.ws import broadcast_sync
+            broadcast_sync({"event": "scrutiny_reset", "data": sync_result})
+        except Exception:
+            pass
 
         total_docs = db.query(Document).count()
         logger.info("scrutiny_reset_complete", total_documents=total_docs)

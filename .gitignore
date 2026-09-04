@@ -10,6 +10,7 @@ wheels/
 
 # Large Neural Network Model Weights (>100MB)
 models/experiments/
+models/*_backup*/
 models/**/*.safetensors
 models/**/*.bin
 models/**/*.pth

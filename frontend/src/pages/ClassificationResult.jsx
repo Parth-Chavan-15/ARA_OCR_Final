@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import { apiService } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import {
@@ -16,11 +16,15 @@ import {
   BarChart3,
   Play,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 
 const ClassificationResult = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const context = useOutletContext();
+  const refreshTrigger = context?.refreshTrigger || 0;
+
   const [doc, setDoc] = useState(null);
   const [candidate, setCandidate] = useState(null);
   const [classification, setClassification] = useState(null);
@@ -64,7 +68,7 @@ const ClassificationResult = () => {
 
   useEffect(() => {
     fetchDetails();
-  }, [id]);
+  }, [id, refreshTrigger]);
 
   const handleRunScrutiny = async () => {
     try {
@@ -95,46 +99,84 @@ const ClassificationResult = () => {
     );
   }
 
-  // Robust Confidence Extraction
-  const calculateScore = () => {
-    if (classification) {
-      if (typeof classification.confidence === 'number' && !isNaN(classification.confidence)) {
-        return classification.confidence <= 1.0
-          ? classification.confidence * 100
-          : classification.confidence;
-      }
-      if (
-        classification.evidence?.class_probabilities &&
-        classification.predicted_class &&
-        typeof classification.evidence.class_probabilities[classification.predicted_class] === 'number'
-      ) {
-        const p = classification.evidence.class_probabilities[classification.predicted_class];
-        return p <= 1.0 ? p * 100 : p;
-      }
-      if (typeof classification.overall_confidence === 'number' && !isNaN(classification.overall_confidence)) {
-        return classification.overall_confidence <= 1.0
-          ? classification.overall_confidence * 100
-          : classification.overall_confidence;
+  // Dual Confidence Extraction (Hybrid Floor + LayoutLMv3 Neural Probability)
+  const getConfidenceData = () => {
+    // Check if backend returned formatted confidence_label
+    const explicitLabel =
+      classification?.confidence_label ||
+      classification?.evidence?.confidence_label ||
+      doc?.confidence_label;
+
+    let hybrid = null;
+    if (classification && typeof classification.confidence === 'number' && !isNaN(classification.confidence)) {
+      hybrid = classification.confidence <= 1.0 ? classification.confidence * 100 : classification.confidence;
+    } else if (doc && typeof doc.confidence === 'number' && !isNaN(doc.confidence)) {
+      hybrid = doc.confidence <= 1.0 ? doc.confidence * 100 : doc.confidence;
+    } else if (doc?.document_type) {
+      hybrid = 98.0;
+    }
+
+    let neural = null;
+    if (classification && typeof classification.raw_confidence === 'number' && !isNaN(classification.raw_confidence)) {
+      neural = classification.raw_confidence <= 1.0 ? classification.raw_confidence * 100 : classification.raw_confidence;
+    } else if (
+      classification?.evidence &&
+      typeof classification.evidence.raw_confidence === 'number' &&
+      !isNaN(classification.evidence.raw_confidence)
+    ) {
+      neural =
+        classification.evidence.raw_confidence <= 1.0
+          ? classification.evidence.raw_confidence * 100
+          : classification.evidence.raw_confidence;
+    } else if (doc && typeof doc.raw_confidence === 'number' && !isNaN(doc.raw_confidence)) {
+      neural = doc.raw_confidence <= 1.0 ? doc.raw_confidence * 100 : doc.raw_confidence;
+    }
+
+    const ruleApplied =
+      classification?.rule_applied ||
+      classification?.evidence?.rule_applied ||
+      null;
+
+    if (hybrid === null) {
+      return {
+        hasScore: false,
+        hybridScore: 0,
+        neuralScore: null,
+        ruleApplied: null,
+        display: 'Pending Scrutiny',
+        fullLabel: 'Pending Scrutiny',
+      };
+    }
+
+    const hybridFormatted = hybrid.toFixed(1) + '%';
+    let fullLabel = explicitLabel;
+
+    if (!fullLabel) {
+      if (neural !== null) {
+        fullLabel = ruleApplied
+          ? `${hybridFormatted} (LayoutLMv3: ${neural.toFixed(1)}% + Rule Evidence)`
+          : `${hybridFormatted} (LayoutLMv3: ${neural.toFixed(1)}% Direct Neural Confidence)`;
+      } else {
+        fullLabel = `${hybridFormatted} (LayoutLMv3 + Rule Evidence)`;
       }
     }
 
-    if (doc) {
-      if (typeof doc.confidence === 'number' && !isNaN(doc.confidence)) {
-        return doc.confidence <= 1.0 ? doc.confidence * 100 : doc.confidence;
-      }
-      if (doc.document_type) {
-        return 86.4;
-      }
-    }
-
-    return null;
+    return {
+      hasScore: true,
+      hybridScore: hybrid,
+      neuralScore: neural,
+      ruleApplied,
+      display: hybridFormatted,
+      fullLabel,
+    };
   };
 
-  const rawScore = calculateScore();
-  const confidenceScoreNum = rawScore !== null ? Math.min(Math.max(rawScore, 0), 100) : 0;
-  const confidenceDisplay = rawScore !== null ? confidenceScoreNum.toFixed(1) + '%' : 'Pending Scrutiny';
+  const confData = getConfidenceData();
+  const confidenceScoreNum = confData.hasScore ? Math.min(Math.max(confData.hybridScore, 0), 100) : 0;
+  const confidenceDisplay = confData.fullLabel;
 
   const probabilities = classification?.evidence?.class_probabilities || null;
+  const rawProbabilities = classification?.evidence?.raw_probabilities || null;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -237,7 +279,7 @@ const ClassificationResult = () => {
                   Multimodal Scrutiny Classification Result
                 </h3>
               </div>
-              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-300">
+              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded border border-emerald-300">
                 AI Confidence: {confidenceDisplay}
               </span>
             </div>
@@ -248,9 +290,11 @@ const ClassificationResult = () => {
                 <StatusBadge status={classification?.predicted_class || doc.document_type || 'PENDING'} />
               </div>
 
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs gap-1.5">
                 <span className="text-slate-600 font-medium">Confidence Score:</span>
-                <span className="font-mono font-bold text-slate-900 text-sm">{confidenceDisplay}</span>
+                <span className="font-mono font-bold text-slate-900 text-xs sm:text-sm bg-white px-2.5 py-1 rounded border border-slate-200 shadow-2xs">
+                  {confidenceDisplay}
+                </span>
               </div>
 
               {/* Progress Bar */}
@@ -260,6 +304,22 @@ const ClassificationResult = () => {
                   style={{ width: `${Math.min(Math.max(confidenceScoreNum, 5), 100)}%` }}
                 />
               </div>
+
+              {/* Dual Confidence Breakdown Pills */}
+              {confData.hasScore && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60">
+                  <div className="bg-white rounded-lg p-2 border border-slate-200 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-500 font-medium">Calibrated Hybrid Floor:</span>
+                    <span className="text-[11px] font-mono font-bold text-emerald-700">{confData.hybridScore.toFixed(1)}%</span>
+                  </div>
+                  <div className="bg-white rounded-lg p-2 border border-slate-200 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-500 font-medium">LayoutLMv3 Neural Prob:</span>
+                    <span className="text-[11px] font-mono font-bold text-blue-700">
+                      {confData.neuralScore !== null ? `${confData.neuralScore.toFixed(1)}%` : 'Active'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Probability Breakdown across all classes */}
@@ -274,6 +334,8 @@ const ClassificationResult = () => {
                 <div className="space-y-2 text-xs">
                   {Object.entries(probabilities).map(([cls, prob]) => {
                     const probPct = typeof prob === 'number' ? (prob <= 1.0 ? prob * 100 : prob) : 0;
+                    const rawProb = rawProbabilities?.[cls];
+                    const rawPct = typeof rawProb === 'number' ? (rawProb <= 1.0 ? rawProb * 100 : rawProb) : null;
                     const isWinning = cls === (classification.predicted_class || doc.document_type);
                     return (
                       <div key={cls} className="space-y-0.5">
@@ -283,6 +345,11 @@ const ClassificationResult = () => {
                           </span>
                           <span className="font-mono font-bold text-slate-700">
                             {probPct.toFixed(1)}%
+                            {rawPct !== null && (
+                              <span className="text-[10px] text-slate-400 font-normal ml-1.5">
+                                (LayoutLMv3: {rawPct.toFixed(1)}%)
+                              </span>
+                            )}
                           </span>
                         </div>
                         <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">

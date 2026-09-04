@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { CheckCircle2, Clock, AlertTriangle, HelpCircle, XCircle } from 'lucide-react';
 
 const StatusBadge = ({ status }) => {
@@ -59,7 +59,7 @@ const StatusBadge = ({ status }) => {
       return (
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
           <CheckCircle2 size={12} className="text-emerald-700" />
-          Verified
+          Classified
         </span>
       );
 

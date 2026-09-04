@@ -86,9 +86,9 @@ const Header = ({ onSyncComplete }) => {
               <span className="font-medium">PostgreSQL Active</span>
             </div>
             <span className="text-gray-300">|</span>
-            <div className="flex items-center space-x-1.5">
+            <div className="flex items-center space-x-1.5" title="Champion Run 3: 91.55% Test Accuracy, 90.37% Weighted F1, 91.72% OOD F1">
               <Cpu size={13} className="text-blue-600" />
-              <span className="font-medium">LayoutLMv3 (80.0% Acc)</span>
+              <span className="font-medium">LayoutLMv3 (91.6% Acc, 91.7% OOD)</span>
             </div>
           </div>
 

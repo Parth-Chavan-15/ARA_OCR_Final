@@ -53,6 +53,24 @@ class ClassificationResult(Base):
         "Document", back_populates="classification_results"
     )
 
+    @property
+    def raw_confidence(self) -> float | None:
+        if isinstance(self.evidence, dict):
+            return self.evidence.get("raw_confidence")
+        return None
+
+    @property
+    def rule_applied(self) -> str | None:
+        if isinstance(self.evidence, dict):
+            return self.evidence.get("rule_applied")
+        return None
+
+    @property
+    def confidence_label(self) -> str | None:
+        if isinstance(self.evidence, dict):
+            return self.evidence.get("confidence_label")
+        return None
+
     def __repr__(self) -> str:
         return (
             f"<ClassificationResult "

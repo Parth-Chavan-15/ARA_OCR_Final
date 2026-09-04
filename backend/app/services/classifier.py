@@ -18,6 +18,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+import re
 
 import numpy as np
 import structlog
@@ -46,6 +47,10 @@ class ClassificationOutput:
     predicted_class: str
     confidence: float
     all_probabilities: dict[str, float] = field(default_factory=dict)
+    raw_confidence: float = 0.0
+    raw_probabilities: dict[str, float] = field(default_factory=dict)
+    rule_applied: Optional[str] = None
+    confidence_label: Optional[str] = None
 
 
 class LayoutXLMClassifier:
@@ -228,24 +233,61 @@ class LayoutXLMClassifier:
             all_probabilities = {
                 cls_name: float(probs_np[i]) for i, cls_name in enumerate(self.CLASSES)
             }
+            raw_probabilities = dict(all_probabilities)
 
             # Top prediction
             top_idx = int(np.argmax(probs_np))
             predicted_class = self.CLASSES[top_idx]
             confidence = float(probs_np[top_idx])
+            raw_confidence = confidence
+            rule_applied: Optional[str] = None
 
             # Hybrid Evidence Calibration
             full_text_lower = " ".join(words).lower()
 
-            # 1. Distinct Out of Scope keywords (NCL, Income, Domicile, Admission/CET, Marksheet)
+            # 1. Distinct Out of Scope keywords (NCL, Income, Domicile, Marksheets, Civil IDs, Allotment)
             oos_cues = [
-                "non creamy layer", "non-creamy layer", "non creamy", "non-creamy", "ncl",
-                "income certificate", "domicile certificate", "nationality certificate",
-                "admission form", "state common entrance test cell",
+                # Non-Creamy Layer (Part B, exclusionary for caste reservation)
+                "non creamy layer", "non-creamy layer", "non creamy", "non-creamy",
+                "ncl certificate", "ncl no",
+                "उन्नत व प्रगत व्यक्ती", "क्रिमिलियर",
+                # Civil & Identity records
+                "income certificate", "उत्पन्न प्रमाणपत्र", "उत्पन्नाचा दाखला",
+                "domicile certificate", "certificate of domicile", "अधिवास प्रमाणपत्र",
+                "nationality certificate", "certificate of nationality", "राष्ट्रीयत्व प्रमाणपत्र",
+                "aadhaar card", "aadhar card", "unique identification authority", "आधार कार्ड",
+                "pan card", "income tax department", "पॅन कार्ड",
+                "ration card", "रेशन कार्ड", "रेशनकार्ड",
+                "driving licence", "driving license", "वाहन चालक परवाना",
+                "passport", "पारपत्र", "voter identity", "voter id", "निवडणूक ओळखपत्र",
+                # Academic & Exam Records (Not reservation documents)
+                "statement of marks", "marksheet", "mark sheet", "गुणपत्रिका", "गुणपत्रक",
+                "passing certificate", "उत्तीर्ण प्रमाणपत्र", "grade card", "grade sheet",
+                "hall ticket", "admit card", "प्रवेशपत्र", "score card", "scorecard",
+                "jee main", "mht-cet score", "cet score",
+                # CET Allotment & College Forms
+                "admission form", "state common entrance test cell", "provisional seat allotment",
                 "allotted choice code", "allotted seat type", "cap round", "cap allotment",
-                "tuition fees", "institute reporting"
+                "tuition fees", "institute reporting", "fee receipt", "फी पावती",
+                # Legal Non-Reservation Declarations
+                "gap certificate", "gap affidavit", "affidavit", "प्रतिज्ञापत्र", "शपथपत्र",
+                "undertaking", "हमीपत्र", "bonafide certificate", "bonafide", "बोनाफाईड",
+                "migration certificate", "स्थलांतर प्रमाणपत्र"
             ]
-            has_oos_marker = any(cue in full_text_lower for cue in oos_cues)
+            has_oos_marker = (
+                any(cue in full_text_lower for cue in oos_cues)
+                or bool(re.search(r"\bncl\b", full_text_lower))
+            )
+            has_caste_blocking_marker = (
+                any(cue in full_text_lower for cue in [
+                    "non creamy layer", "non-creamy layer", "non creamy", "non-creamy",
+                    "ncl certificate", "ncl no", "उन्नत व प्रगत व्यक्ती", "क्रिमिलियर",
+                    "admission form", "state common entrance test cell", "provisional seat allotment",
+                    "allotted choice code", "allotted seat type", "cap round", "cap allotment",
+                    "statement of marks", "marksheet", "mark sheet", "passing certificate"
+                ])
+                or bool(re.search(r"\bncl\b", full_text_lower))
+            )
 
             # 2. Validity Receipt cues (Receipt from Scrutiny Committee)
             is_validity_receipt = (
@@ -277,7 +319,7 @@ class LayoutXLMClassifier:
                  or ("district caste certificate scrutiny committee" in full_text_lower and not is_validity_receipt)
                  or ("scrutiny committee" in full_text_lower and not is_validity_receipt))
                 and not is_validity_receipt
-                and not has_oos_marker
+                and not has_caste_blocking_marker
             )
 
             # 4. Caste Certificate cues (True Caste Certificate)
@@ -290,7 +332,7 @@ class LayoutXLMClassifier:
                  or "form 8" in full_text_lower or "form-8" in full_text_lower
                  or "produced by other backward classes" in full_text_lower
                  or "produced by scheduled castes" in full_text_lower)
-                and not has_oos_marker
+                and not has_caste_blocking_marker
                 and not is_validity_cert
                 and not is_validity_receipt
             )
@@ -312,7 +354,7 @@ class LayoutXLMClassifier:
                     "leaving certificate", "school leaving", "college leaving", "transfer certificate",
                     "lc no", "lc no.", "name of the pupil", "general register", "शाळा सोडल्याचा दाखला"
                 ])
-                and not has_oos_marker
+                and not has_caste_blocking_marker
                 and not is_validity_cert
                 and not is_caste_cert
                 and not is_validity_receipt
@@ -322,33 +364,56 @@ class LayoutXLMClassifier:
             is_oos = (
                 has_oos_marker
                 and not is_validity_receipt
+                and not is_validity_cert
+                and not is_caste_cert
+                and not is_lc
+                and not is_proforma
             )
 
-            # Route by priority
-            if is_oos:
-                logger.info("rule_calibration_applied", rule="OUT_OF_SCOPE")
-                predicted_class = "UNKNOWN_OUT_OF_SCOPE"
-                confidence = max(confidence, 0.98)
-            elif is_validity_receipt:
-                logger.info("rule_calibration_applied", rule="CASTE_VALIDITY_RECEIPT")
-                predicted_class = "CASTE_VALIDITY_RECEIPT"
-                confidence = max(confidence, 0.98)
-            elif is_validity_cert:
+            # Route by priority: Statutory reservation certificates take precedence
+            if is_validity_cert:
                 logger.info("rule_calibration_applied", rule="CASTE_VALIDITY_CERTIFICATE")
                 predicted_class = "CASTE_VALIDITY_CERTIFICATE"
                 confidence = max(confidence, 0.98)
+                rule_applied = "CASTE_VALIDITY_CERTIFICATE"
             elif is_caste_cert:
                 logger.info("rule_calibration_applied", rule="CASTE_CERTIFICATE")
                 predicted_class = "CASTE_CERTIFICATE"
                 confidence = max(confidence, 0.98)
+                rule_applied = "CASTE_CERTIFICATE"
+            elif is_validity_receipt:
+                logger.info("rule_calibration_applied", rule="CASTE_VALIDITY_RECEIPT")
+                predicted_class = "CASTE_VALIDITY_RECEIPT"
+                confidence = max(confidence, 0.98)
+                rule_applied = "CASTE_VALIDITY_RECEIPT"
             elif is_proforma:
                 logger.info("rule_calibration_applied", rule="PROFORMA_O")
                 predicted_class = "PROFORMA_O"
                 confidence = max(confidence, 0.98)
+                rule_applied = "PROFORMA_O"
             elif is_lc:
                 logger.info("rule_calibration_applied", rule="LEAVING_CERTIFICATE")
                 predicted_class = "LEAVING_CERTIFICATE"
                 confidence = max(confidence, 0.98)
+                rule_applied = "LEAVING_CERTIFICATE"
+            elif is_oos:
+                logger.info("rule_calibration_applied", rule="OUT_OF_SCOPE")
+                predicted_class = "UNKNOWN_OUT_OF_SCOPE"
+                confidence = max(confidence, 0.98)
+                rule_applied = "OUT_OF_SCOPE"
+            else:
+                # Document did not match any authorized statutory reservation or distinct certificate cues.
+                # In State CET admission scrutiny, an unverified document MUST NOT be falsely accepted as
+                # a Caste or Validity Certificate. Route any unverified reservation prediction to UNKNOWN_OUT_OF_SCOPE.
+                if predicted_class in ["CASTE_VALIDITY_CERTIFICATE", "CASTE_CERTIFICATE", "CASTE_VALIDITY_RECEIPT", "PROFORMA_O", "LEAVING_CERTIFICATE"]:
+                    logger.info(
+                        "unverified_reservation_routed_to_oos",
+                        previous_prediction=predicted_class,
+                        raw_confidence=confidence,
+                    )
+                    predicted_class = "UNKNOWN_OUT_OF_SCOPE"
+                    confidence = 0.95
+                    rule_applied = "UNVERIFIED_RESERVATION_OOS_GATE"
 
             # Apply confidence threshold — below threshold -> UNKNOWN (§19)
             if confidence < settings.CONFIDENCE_THRESHOLD:
@@ -359,11 +424,35 @@ class LayoutXLMClassifier:
                     threshold=settings.CONFIDENCE_THRESHOLD,
                 )
                 predicted_class = "UNKNOWN_OUT_OF_SCOPE"
+                rule_applied = "CONFIDENCE_THRESHOLD_GATE"
+
+            # Format dual display label: hybrid floor and in-bracket neural network probability + rule evidence
+            raw_confidence = float(raw_probabilities.get(predicted_class, raw_confidence))
+            neural_pct = raw_confidence * 100
+            if rule_applied:
+                confidence_label = f"{confidence * 100:.1f}% (LayoutLMv3: {neural_pct:.1f}% + Rule Evidence)"
+            else:
+                confidence_label = f"{confidence * 100:.1f}% (LayoutLMv3: {confidence * 100:.1f}% Direct Neural Confidence)"
+
+            # Recalibrate probability distribution so predicted class matches the calibrated confidence
+            if predicted_class in all_probabilities:
+                rem = max(0.01, 1.0 - confidence)
+                other_sum = sum(v for k, v in all_probabilities.items() if k != predicted_class) or 1.0
+                calibrated_probs = {}
+                for k, v in all_probabilities.items():
+                    if k == predicted_class:
+                        calibrated_probs[k] = round(confidence, 4)
+                    else:
+                        calibrated_probs[k] = round((v / other_sum) * rem, 4)
+                all_probabilities = calibrated_probs
 
             logger.info(
                 "classification_result",
                 predicted_class=predicted_class,
                 confidence=round(confidence, 4),
+                raw_confidence=round(raw_confidence, 4),
+                rule_applied=rule_applied,
+                confidence_label=confidence_label,
                 fine_tuned=self.fine_tuned,
             )
 
@@ -371,6 +460,10 @@ class LayoutXLMClassifier:
                 predicted_class=predicted_class,
                 confidence=confidence,
                 all_probabilities=all_probabilities,
+                raw_confidence=raw_confidence,
+                raw_probabilities=raw_probabilities,
+                rule_applied=rule_applied,
+                confidence_label=confidence_label,
             )
 
         except Exception as e:
@@ -379,6 +472,10 @@ class LayoutXLMClassifier:
                 predicted_class="UNKNOWN_OUT_OF_SCOPE",
                 confidence=0.0,
                 all_probabilities={c: 0.0 for c in self.CLASSES},
+                raw_confidence=0.0,
+                raw_probabilities={c: 0.0 for c in self.CLASSES},
+                rule_applied="INFERENCE_EXCEPTION",
+                confidence_label="0.0% (Inference Error)",
             )
 
     def _prepare_tokens(
@@ -421,10 +518,12 @@ class LayoutXLMClassifier:
 
         return words, boxes
 
-    def _load_image(self, image_path: str) -> Optional[Image.Image]:
+    def _load_image(self, image_path: Any) -> Optional[Image.Image]:
         """Load and convert image to RGB PIL Image."""
         try:
-            img = Image.open(image_path).convert("RGB")
+            if isinstance(image_path, (list, tuple)) and len(image_path) > 0:
+                image_path = image_path[0]
+            img = Image.open(str(image_path)).convert("RGB")
             return img
         except Exception as e:
             logger.warning("image_load_failed", path=image_path, error=str(e))

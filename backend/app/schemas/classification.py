@@ -31,6 +31,9 @@ class ClassificationResultResponse(BaseModel):
     document_id: str
     predicted_class: str
     confidence: float
+    raw_confidence: Optional[float] = None
+    rule_applied: Optional[str] = None
+    confidence_label: Optional[str] = None
     evidence: dict[str, Any]
     model_version: str
     created_at: datetime
@@ -44,6 +47,8 @@ class ClassificationSummary(BaseModel):
     document_id: str
     predicted_class: Optional[str] = None
     confidence: Optional[float] = None
+    raw_confidence: Optional[float] = None
+    confidence_label: Optional[str] = None
     status: str
 
 
@@ -59,6 +64,9 @@ class ClassifyResponse(BaseModel):
     status: str
     predicted_class: Optional[str] = None
     confidence: Optional[float] = None
+    raw_confidence: Optional[float] = None
+    rule_applied: Optional[str] = None
+    confidence_label: Optional[str] = None
     language: Optional[str] = None
     ocr_confidence: Optional[float] = None
     evidence: Optional[dict[str, Any]] = None
