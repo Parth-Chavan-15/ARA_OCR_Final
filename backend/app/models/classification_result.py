@@ -34,6 +34,7 @@ class ClassificationResult(Base):
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    extracted_fields: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     model_version: Mapped[str] = mapped_column(
         String(128), nullable=False
     )
@@ -44,7 +45,6 @@ class ClassificationResult(Base):
 
     # ── Future columns (deferred §37) ──
     # template_type: Mapped[str | None]          (Form 6/7/8)
-    # extracted_fields: Mapped[dict | None]      (field extraction)
     # validation_result: Mapped[dict | None]     (validation findings)
     # cross_document_findings: Mapped[dict | None]
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
-import { createWebSocketClient } from '../services/api';
+import { createWebSocketClient, queueService } from '../services/api';
 
 const Layout = () => {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -15,6 +15,9 @@ const Layout = () => {
     // Connect WebSocket for live real-time state sync across all pages
     const cleanupWs = createWebSocketClient((data) => {
       console.log('Live Scrutiny Event received via WebSocket:', data);
+      if (data?.document_id) {
+        queueService.removeFromQueue(data.document_id);
+      }
       setRefreshTrigger(prev => prev + 1);
     });
 

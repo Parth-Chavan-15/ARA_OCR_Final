@@ -28,6 +28,15 @@ class Candidate(Base):
     reserve_category: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    institute_code: Mapped[str] = mapped_column(
+        String(64), index=True, default="06122", nullable=False
+    )
+    stream: Mapped[str] = mapped_column(
+        String(128), index=True, default="MHT-CET Engineering", nullable=False
+    )
+    institute_name: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

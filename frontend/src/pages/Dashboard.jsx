@@ -173,12 +173,12 @@ const Dashboard = () => {
               AI Scrutiny Accuracy
             </span>
             <p className="text-2xl font-black text-amber-900 mt-1">
-              {modelInfo?.accuracy ? `${modelInfo.accuracy}%` : '91.55%'}
+              {modelInfo?.accuracy ? `${modelInfo.accuracy}%` : '88.27%'}
             </p>
             <span className="text-[10px] text-amber-800 font-bold bg-amber-50 px-1.5 py-0.5 rounded mt-1 inline-block">
               {modelInfo?.best_run_id 
                 ? `Winning Run ${modelInfo.best_run_id} Model (${modelInfo.weighted_f1}% Weighted, ${modelInfo.ood_f1}% OOD F1)`
-                : 'Winning Run 3 Model (90.4% Weighted F1, 91.7% OOD F1)'}
+                : 'Winning Run 4 Model (87.9% Weighted F1, 84.7% OOD F1)'}
             </span>
           </div>
           <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">

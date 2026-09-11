@@ -6,6 +6,7 @@ import CandidateDocuments from './pages/CandidateDocuments';
 import IncomingDocuments from './pages/IncomingDocuments';
 import ClassificationResult from './pages/ClassificationResult';
 import ReviewQueue from './pages/ReviewQueue';
+import InstituteHierarchy from './pages/InstituteHierarchy';
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
+          <Route path="institutes" element={<InstituteHierarchy />} />
           <Route path="candidates" element={<CandidateDocuments />} />
           <Route path="incoming" element={<IncomingDocuments />} />
           <Route path="result/:id" element={<ClassificationResult />} />

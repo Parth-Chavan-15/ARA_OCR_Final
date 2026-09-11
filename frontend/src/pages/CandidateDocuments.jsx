@@ -354,7 +354,7 @@ const CandidateDocuments = () => {
                           <button
                             onClick={() => {
                               setSelectedCandidate(null);
-                              navigate(`/result/${doc.document_id}`);
+                              navigate(`/result/${doc.document_id}`, { state: { from: '/candidates' } });
                             }}
                             className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 transition cursor-pointer"
                           >

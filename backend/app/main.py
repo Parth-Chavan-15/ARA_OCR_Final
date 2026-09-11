@@ -14,6 +14,7 @@ from app.db.init_db import init_database, seed_demo_data
 from app.api.candidates import router as candidates_router
 from app.api.documents import router as documents_router
 from app.api.classification import router as classification_router
+from app.api.institutes import router as institutes_router
 from app.api.ws import router as ws_router
 
 logger = structlog.get_logger(__name__)
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(candidates_router)
 app.include_router(classification_router)
 app.include_router(documents_router)
+app.include_router(institutes_router)
 app.include_router(ws_router)
 
 @app.on_event("startup")
@@ -70,8 +72,25 @@ async def on_startup():
 
 @app.get("/api/health", tags=["Health"])
 def health_check():
+    import time
+    from sqlalchemy import text
+    db_status = "disconnected"
+    latency_ms = None
+    start_t = time.time()
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        db_status = "connected"
+        latency_ms = round((time.time() - start_t) * 1000, 1)
+    except Exception as e:
+        logger.warning("health_db_check_failed", error=str(e))
+
     return {
-        "status": "ok",
+        "status": "ok" if db_status == "connected" else "degraded",
+        "database": db_status,
+        "database_type": "PostgreSQL",
+        "latency_ms": latency_ms,
         "version": settings.PIPELINE_VERSION
     }
 
@@ -88,18 +107,18 @@ def get_model_info():
                 report = json.load(f)
             return {
                 "status": "success",
-                "architecture": "LayoutLMv3 Multimodal",
-                "ocr_engine": "PaddleOCR (GPU)",
-                "best_run_id": report.get("best_run_id", 3),
-                "best_run_name": report.get("best_run_name", "Regularized Weighted (Dropout 0.15, LR 2e-5)"),
-                "accuracy": report.get("best_accuracy", 91.55),
-                "weighted_f1": report.get("best_weighted_f1", 90.37),
-                "macro_f1": report.get("best_macro_f1", 60.04),
-                "ood_f1": report.get("ood_f1", 91.72),
-                "composite_score": report.get("best_composite_score", 81.27),
-                "total_dataset_size": report.get("total_dataset_size", 741),
-                "train_samples": report.get("train_samples", 528),
-                "test_samples": report.get("test_samples", 213),
+                "architecture": "LayoutLMv3 (Champion Run 4)",
+                "ocr_engine": "PaddleOCR + EasyOCR (GPU)",
+                "best_run_id": report.get("best_run_id", 4),
+                "best_run_name": report.get("best_run_name", "Extended Cosine Schedule (LR 3.5e-5)"),
+                "accuracy": report.get("best_accuracy", 88.27),
+                "weighted_f1": report.get("best_weighted_f1", 87.90),
+                "macro_f1": report.get("best_macro_f1", 67.75),
+                "ood_f1": report.get("ood_f1", 84.71),
+                "composite_score": report.get("best_composite_score", 81.85),
+                "total_dataset_size": report.get("total_dataset_size", 1138),
+                "train_samples": report.get("train_samples", 797),
+                "test_samples": report.get("test_samples", 341),
                 "benchmark_timestamp": report.get("benchmark_timestamp", "")
             }
         except Exception as e:
@@ -107,17 +126,17 @@ def get_model_info():
 
     return {
         "status": "fallback",
-        "architecture": "LayoutLMv3 Multimodal",
-        "ocr_engine": "PaddleOCR (GPU)",
-        "best_run_id": 3,
-        "best_run_name": "Regularized Weighted (Dropout 0.15, LR 2e-5)",
-        "accuracy": 91.55,
-        "weighted_f1": 90.37,
-        "macro_f1": 60.04,
-        "ood_f1": 91.72,
-        "composite_score": 81.27,
-        "total_dataset_size": 741,
-        "train_samples": 528,
-        "test_samples": 213,
-        "benchmark_timestamp": "2026-09-04"
+        "architecture": "LayoutLMv3 (Champion Run 4)",
+        "ocr_engine": "PaddleOCR + EasyOCR (GPU)",
+        "best_run_id": 4,
+        "best_run_name": "Extended Cosine Schedule (LR 3.5e-5)",
+        "accuracy": 88.27,
+        "weighted_f1": 87.90,
+        "macro_f1": 67.75,
+        "ood_f1": 84.71,
+        "composite_score": 81.85,
+        "total_dataset_size": 1138,
+        "train_samples": 797,
+        "test_samples": 341,
+        "benchmark_timestamp": "2026-09-10"
     }

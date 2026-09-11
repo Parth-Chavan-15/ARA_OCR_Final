@@ -34,8 +34,10 @@ class EvidenceService:
         "LEAVING_CERTIFICATE": [
             "leaving certificate", "school leaving", "college leaving", "transfer certificate",
             "lc no", "lc no.", "general register", "name of the pupil",
-            "शाळा सोडल्याचा दाखला", "महाविद्यालय सोडल्याचा दाखला", "स्थानांतरण प्रमाणपत्र",
-            "विद्यार्थ्याचे नाव", "जनरल रजिस्टर"
+            "शाळा सोडल्याचा दाखला", "शाला सोडल्याचा दाखला", "शाळा सोडल्याचा", "शाला सोडल्याचा",
+            "शालासोडलयाचा दाखला", "सोडल्याचा दाखला", "दाखला क्रमांक", "दाखला क़मांक",
+            "महाविद्यालय सोडल्याचा दाखला", "स्थानांतरण प्रमाणपत्र",
+            "विद्यार्थ्याचे नाव", "जनरल रजिस्टर", "रजिस्टर क्रमांक"
         ],
         "UNKNOWN_OUT_OF_SCOPE": [
             "non creamy layer", "non-creamy layer", "ncl certificate", "ncl no", "income certificate",
@@ -65,7 +67,7 @@ class EvidenceService:
             ]
             full_text = " ".join(token_strings)
 
-            # 1. Multi-word phrase occurrences in full concatenated text
+            # 1. Multi-word and single-word phrase occurrences in full concatenated text
             for kw in keywords:
                 if kw in full_text:
                     matched.add(kw)
@@ -77,9 +79,11 @@ class EvidenceService:
                 if not text_norm:
                     continue
 
-                for kw in keywords:
-                    if kw == text_norm or kw in text_norm or (len(text_norm) >= 4 and text_norm in kw):
-                        matched.add(kw)
+                for kw in (matched if matched else keywords):
+                    kw_words = kw.split()
+                    if text_norm == kw or kw in text_norm or (text_norm in kw_words and len(text_norm) >= 3):
+                        if kw in full_text or text_norm == kw:
+                            matched.add(kw)
                         evidence_items.append({
                             "text": text_raw,
                             "page_number": getattr(token, "page_number", 1),

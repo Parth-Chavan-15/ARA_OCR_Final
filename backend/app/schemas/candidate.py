@@ -24,6 +24,21 @@ class CandidateBase(BaseModel):
         max_length=64,
         description="Reserve category (e.g. SC, OBC, VJNT, SBC, OPEN)",
     )
+    institute_code: str = Field(
+        default="06122",
+        max_length=64,
+        description="5-digit or alphanumeric Institute Code",
+    )
+    stream: str = Field(
+        default="MHT-CET Engineering",
+        max_length=128,
+        description="Stream or course (e.g. NEET(UG) MBBS, MHT-CET Engineering)",
+    )
+    institute_name: Optional[str] = Field(
+        None,
+        max_length=256,
+        description="Institute full name if available",
+    )
 
 
 class CandidateCreate(CandidateBase):

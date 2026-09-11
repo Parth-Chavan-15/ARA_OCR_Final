@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { apiService } from '../services/api';
 import { RefreshCw, Database, Cpu, CheckCircle2, RotateCcw, AlertTriangle } from 'lucide-react';
 
@@ -6,6 +6,33 @@ const Header = ({ onSyncComplete }) => {
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [dbHealth, setDbHealth] = useState({ status: 'connected', latency: null });
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkDb = async () => {
+      try {
+        const res = await apiService.checkHealth();
+        if (isMounted) {
+          setDbHealth({
+            status: res.database === 'connected' ? 'connected' : 'disconnected',
+            latency: res.latency_ms,
+          });
+        }
+      } catch {
+        if (isMounted) {
+          setDbHealth({ status: 'disconnected', latency: null });
+        }
+      }
+    };
+
+    checkDb();
+    const timer = setInterval(checkDb, 15000);
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   const handleSync = async () => {
     try {
@@ -81,14 +108,41 @@ const Header = ({ onSyncComplete }) => {
         {/* System Indicators & Sync/Reset Actions */}
         <div className="flex items-center space-x-2.5">
           <div className="hidden lg:flex items-center space-x-2.5 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700">
-            <div className="flex items-center space-x-1.5">
-              <Database size={13} className="text-emerald-600" />
-              <span className="font-medium">PostgreSQL Active</span>
+            {/* Real-time DB Health */}
+            <div
+              className="flex items-center space-x-1.5"
+              title={
+                dbHealth.status === 'connected'
+                  ? 'PostgreSQL Database Connected'
+                  : 'PostgreSQL Database Disconnected / Unreachable'
+              }
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  dbHealth.status === 'connected'
+                    ? 'bg-emerald-500 animate-pulse'
+                    : 'bg-rose-500 animate-pulse'
+                }`}
+              />
+              <Database
+                size={13}
+                className={dbHealth.status === 'connected' ? 'text-emerald-600' : 'text-rose-600'}
+              />
+              <span
+                className={`font-semibold ${
+                  dbHealth.status === 'connected' ? 'text-emerald-700' : 'text-rose-700'
+                }`}
+              >
+                {dbHealth.status === 'connected' ? 'PostgreSQL Active' : 'PostgreSQL Offline'}
+              </span>
             </div>
             <span className="text-gray-300">|</span>
-            <div className="flex items-center space-x-1.5" title="Champion Run 3: 91.55% Test Accuracy, 90.37% Weighted F1, 91.72% OOD F1">
+            <div
+              className="flex items-center space-x-1.5 cursor-help"
+              title="Champion Run 4: 88.27% Test Accuracy, 87.90% Weighted F1, 84.71% OOD F1 (1,138 Samples across 1,067 Docs)"
+            >
               <Cpu size={13} className="text-blue-600" />
-              <span className="font-medium">LayoutLMv3 (91.6% Acc, 91.7% OOD)</span>
+              <span className="font-medium text-slate-800">LayoutLMv3 (88.3% Acc, 84.7% OOD)</span>
             </div>
           </div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { apiService } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import {
@@ -17,11 +17,17 @@ import {
   Play,
   Loader2,
   RefreshCw,
+  Calendar,
+  Hash,
+  Building,
+  User,
+  Tag,
 } from 'lucide-react';
 
 const ClassificationResult = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const context = useOutletContext();
   const refreshTrigger = context?.refreshTrigger || 0;
 
@@ -178,14 +184,65 @@ const ClassificationResult = () => {
   const probabilities = classification?.evidence?.class_probabilities || null;
   const rawProbabilities = classification?.evidence?.raw_probabilities || null;
 
+  const extractedFields = classification?.extracted_fields || doc?.extracted_fields || null;
+
+  const FIELD_LABELS = {
+    certificate_no: 'Certificate / Decision No',
+    receipt_number: 'Receipt Number',
+    serial_number: 'Serial Number',
+    application_number: 'Application No',
+    general_register_no: 'G.R. Number',
+    validity_decision: 'Validity Decision',
+    valid_upto: 'Valid Upto Date',
+    dated: 'Dated',
+    issue_date: 'Issue Date',
+    submission_date: 'Submission / Receipt Date',
+    date_of_birth: 'Date of Birth',
+    issuing_authority: 'Issuing Authority / SDO',
+    scrutiny_committee: 'Divisional Scrutiny Committee',
+    caste_claim: 'Caste Claim',
+    caste_category: 'Caste Category',
+    caste_or_religion: 'Caste / Religion',
+    minority_type: 'Minority Classification',
+    community_claim: 'Community Claim',
+    mother_tongue: 'Mother Tongue',
+    district: 'District / Division',
+    candidate_name: 'Candidate Name',
+    student_name: 'Student Name',
+    enrollment_number: 'Enrollment No',
+  };
+
+  const getFieldIcon = (key) => {
+    const k = key.toLowerCase();
+    if (k.includes('date') || k.includes('dated') || k.includes('upto')) return <Calendar size={13} className="text-blue-600 shrink-0" />;
+    if (k.includes('no') || k.includes('number')) return <Hash size={13} className="text-purple-600 shrink-0" />;
+    if (k.includes('authority') || k.includes('committee')) return <Building size={13} className="text-slate-600 shrink-0" />;
+    if (k.includes('name')) return <User size={13} className="text-emerald-600 shrink-0" />;
+    if (k.includes('caste') || k.includes('minority') || k.includes('community')) return <Tag size={13} className="text-amber-600 shrink-0" />;
+    return <ShieldCheck size={13} className="text-blue-600 shrink-0" />;
+  };
+
+  const visibleFieldEntries = extractedFields
+    ? Object.entries(extractedFields).filter(
+        ([k, v]) => !['extracted_at_step', 'predicted_class'].includes(k) && v !== null && v !== undefined && String(v).trim() !== ''
+      )
+    : [];
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Top Banner */}
       <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => {
+              if (location.state?.from) {
+                navigate(location.state.from);
+              } else {
+                navigate('/incoming');
+              }
+            }}
             className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition border border-slate-200 cursor-pointer"
+            title="Go Back"
           >
             <ArrowLeft size={18} />
           </button>
@@ -372,6 +429,79 @@ const ClassificationResult = () => {
               <div className="pt-2 text-xs text-slate-600 bg-blue-50/60 p-3 rounded-lg border border-blue-200">
                 <span className="font-bold text-blue-900 block mb-1">Scrutiny Summary:</span>
                 <p>{classification.evidence.summary}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Extracted Key Decision Fields Card */}
+          <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck size={18} className="text-emerald-600" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Extracted Key Decision Fields
+                </h3>
+              </div>
+              <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded border border-emerald-200 uppercase tracking-wider">
+                Stage 9: Parallel Field Extraction
+              </span>
+            </div>
+
+            {visibleFieldEntries.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {visibleFieldEntries.map(([key, value]) => {
+                  const label = FIELD_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                  const valStr = String(value);
+                  const isDecision = key === 'validity_decision';
+                  const isMono = key.includes('no') || key.includes('number') || key.includes('enrollment');
+                  const valUpper = valStr.toUpperCase();
+                  const isValid = valUpper.includes('VALID') && !valUpper.includes('INVALID') && !valUpper.includes('OUT_OF_SCOPE');
+                  const isOutOfScope = valUpper.includes('OUT_OF_SCOPE');
+
+                  return (
+                    <div
+                      key={key}
+                      className="bg-slate-50/80 hover:bg-slate-50 border border-slate-200/80 rounded-lg p-3 transition flex flex-col justify-between space-y-1.5"
+                    >
+                      <div className="flex items-center space-x-1.5">
+                        {getFieldIcon(key)}
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          {label}
+                        </span>
+                      </div>
+                      <div>
+                        {isDecision ? (
+                          <span
+                            className={`inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-md border ${
+                              isValid
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                : isOutOfScope
+                                ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                : 'bg-rose-50 text-rose-800 border-rose-300'
+                            }`}
+                          >
+                            {valStr}
+                          </span>
+                        ) : isMono ? (
+                          <span className="font-mono text-xs font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                            {valStr}
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-slate-800 break-words">
+                            {valStr}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-3.5 text-xs text-amber-800 flex items-center space-x-2">
+                <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                <span>
+                  Key decision fields have not been extracted yet. Click <strong>Run AI Scrutiny</strong> above to parse structured fields.
+                </span>
               </div>
             )}
           </div>

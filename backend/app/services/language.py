@@ -54,9 +54,12 @@ class LanguageService:
 
         deva_ratio = devanagari_count / total
 
+        # If predominantly Devanagari (>75%) -> Marathi
         if deva_ratio > 0.75:
             return "Marathi"
-        elif deva_ratio < 0.15:
+        # If very few Devanagari characters (less than 5% and under 6 chars) -> Pure English
+        elif deva_ratio < 0.05 and devanagari_count < 6:
             return "English"
+        # Otherwise, document contains both English and Marathi fields -> Bilingual
         else:
             return "Marathi + English"

@@ -47,6 +47,7 @@ try:
     from app.services.language import LanguageService
     from app.services.classifier import classify_document, ClassificationOutput
     from app.services.evidence import EvidenceService
+    from app.services.field_extractor import FieldExtractor
 
     SERVICES_AVAILABLE = True
 except ImportError as e:
@@ -180,6 +181,17 @@ def run_classification_pipeline(
         evidence["confidence_label"] = class_output.confidence_label
         stages.append(_stage("evidence_generation", "COMPLETED"))
 
+        # ── Stage 8.5: Field Extraction ──
+        stages.append(_stage("field_extraction", "STARTED"))
+        full_ocr_text = " ".join([t.text for t in ocr_result.tokens]) if ocr_result and ocr_result.tokens else ""
+        extracted_fields = FieldExtractor.extract_fields(
+            predicted_class=class_output.predicted_class,
+            full_text=full_ocr_text,
+            ocr_tokens=ocr_result.tokens,
+            filename=document.filename,
+        )
+        stages.append(_stage("field_extraction", "COMPLETED"))
+
         # ── Stage 9: Persist classification result (§21) ──
         stages.append(_stage("persist_result", "STARTED"))
         db.query(ClassificationResult).filter(ClassificationResult.document_id == document.document_id).delete()
@@ -189,6 +201,7 @@ def run_classification_pipeline(
             predicted_class=class_output.predicted_class,
             confidence=class_output.confidence,
             evidence=evidence,
+            extracted_fields=extracted_fields,
             model_version=settings.CLASSIFIER_MODEL_VERSION,
         )
         db.add(classification_record)
@@ -213,6 +226,7 @@ def run_classification_pipeline(
                 "raw_confidence": class_output.raw_confidence,
                 "rule_applied": class_output.rule_applied,
                 "confidence_label": class_output.confidence_label,
+                "extracted_fields": extracted_fields,
                 "status": document.status,
             })
         except Exception:
@@ -238,6 +252,7 @@ def run_classification_pipeline(
             language=language,
             ocr_confidence=ocr_result.overall_confidence,
             evidence=evidence,
+            extracted_fields=extracted_fields,
             model_version=settings.CLASSIFIER_MODEL_VERSION,
             pipeline_stages=stages,
         )
@@ -246,6 +261,17 @@ def run_classification_pipeline(
         stages.append(_stage(pe.stage, "FAILED", error=pe.message))
         document.status = "ERROR"
         db.commit()
+        try:
+            from app.api.ws import broadcast_sync
+            broadcast_sync({
+                "event": "document_error",
+                "document_id": document.document_id,
+                "candidate_id": document.candidate_id,
+                "error": pe.message,
+                "status": "ERROR",
+            })
+        except Exception:
+            pass
         logger.error(
             "pipeline_stage_failed",
             document_id=document.document_id,
@@ -263,6 +289,17 @@ def run_classification_pipeline(
         stages.append(_stage("pipeline", "FAILED", error=str(e)))
         document.status = "ERROR"
         db.commit()
+        try:
+            from app.api.ws import broadcast_sync
+            broadcast_sync({
+                "event": "document_error",
+                "document_id": document.document_id,
+                "candidate_id": document.candidate_id,
+                "error": str(e),
+                "status": "ERROR",
+            })
+        except Exception:
+            pass
         logger.error(
             "classification_pipeline_failed",
             document_id=document.document_id,

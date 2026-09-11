@@ -35,6 +35,7 @@ class DocumentResponse(BaseModel):
     confidence: Optional[float] = None
     raw_confidence: Optional[float] = None
     confidence_label: Optional[str] = None
+    extracted_fields: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

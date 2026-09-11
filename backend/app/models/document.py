@@ -69,6 +69,12 @@ class Document(Base):
             return self.classification_results[-1].evidence.get("confidence_label")
         return None
 
+    @property
+    def extracted_fields(self) -> dict | None:
+        if self.classification_results and hasattr(self.classification_results[-1], "extracted_fields"):
+            return self.classification_results[-1].extracted_fields
+        return None
+
     def __repr__(self) -> str:
         return (
             f"<Document {self.document_id} "

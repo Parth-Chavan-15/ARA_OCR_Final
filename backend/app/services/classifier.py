@@ -350,10 +350,24 @@ class LayoutXLMClassifier:
 
             # 6. Leaving Certificate cues
             is_lc = (
-                any(cue in full_text_lower for cue in [
-                    "leaving certificate", "school leaving", "college leaving", "transfer certificate",
-                    "lc no", "lc no.", "name of the pupil", "general register", "शाळा सोडल्याचा दाखला"
-                ])
+                (
+                    any(cue in full_text_lower for cue in [
+                        "leaving certificate", "school leaving", "college leaving", "transfer certificate",
+                        "lc no", "lc no.", "name of the pupil", "general register",
+                        # Marathi variations for School/College Leaving Certificate
+                        "शाळा सोडल्याचा दाखला", "शाला सोडल्याचा दाखला", "शाळा सोडल्याचा", "शाला सोडल्याचा",
+                        "शाळासोडल्याचा दाखला", "शालासोडलयाचा दाखला", "शाळासोडल्याचा", "शालासोडलयाचा",
+                        "सोडल्याचा दाखला", "सोडलयाचा दाखला", "सोडल्याचा", "सोडलयाचा",
+                        "दाखला क्रमांक", "दाखला क़मांक", "दाखला क्र", "दाखला क",
+                        "विद्यार्थ्याचे नाव", "विद्यार्थ्यांचे नाव", "विद्यार्थ्यांचा नाव", "विद्यार्थी नाव",
+                        "जनरल रजिस्टर", "रजिस्टर क्रमांक", "रजिस्टर नंबर", "रिजरटरक़ा",
+                        "महाविद्यालय सोडल्याचा दाखला", "स्थानांतरण प्रमाणपत्र", "शाळेचे नाव"
+                    ])
+                    or (
+                        any(d in full_text_lower for d in ["दाखला", "प्रमाणपत्र", "certificate"])
+                        and any(s in full_text_lower for s in ["शाळा", "शाला", "शाळे", "शाके", "विद्यार्थी", "विद्यार्थ्या", "वयाथयोचा", "s.s.c", "ssc", "hsc", "ह.से."])
+                    )
+                )
                 and not has_caste_blocking_marker
                 and not is_validity_cert
                 and not is_caste_cert

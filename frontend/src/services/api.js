@@ -44,6 +44,19 @@ export const apiService = {
   syncStorage: () => api.post('/documents/sync'),
   resetScrutiny: () => api.post('/documents/reset'),
   getModelInfo: () => api.get('/model-info'),
+  checkHealth: () => api.get('/health'),
+  
+  // Institute Scrutiny Hierarchy
+  getInstitutesSummary: () => api.get('/institutes/summary'),
+  getInstituteCandidates: (instituteCode, stream = '') =>
+    api.get(`/institutes/${instituteCode}/candidates`, { params: stream ? { stream } : {} }),
+  getInstituteExportCsvUrl: (stream = '', instituteCode = '') => {
+    const params = new URLSearchParams();
+    if (stream) params.append('stream', stream);
+    if (instituteCode) params.append('institute_code', instituteCode);
+    const qs = params.toString();
+    return `/api/institutes/export-csv${qs ? '?' + qs : ''}`;
+  },
 };
 
 export const queueService = {
@@ -94,18 +107,19 @@ export const queueService = {
 
 export const createWebSocketClient = (onMessage) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.hostname || 'localhost';
-  const port = '8000';
-  const wsUrl = `${protocol}//${host}:${port}/ws/scrutiny`;
+  const primaryUrl = `${protocol}//${window.location.host}/ws/scrutiny`;
+  const directUrl = `${protocol}//${window.location.hostname || 'localhost'}:8000/ws/scrutiny`;
 
   let ws = null;
   let reconnectTimer = null;
   let pingTimer = null;
   let isClosedExplicitly = false;
+  let useDirect = false;
 
   const connect = () => {
     try {
-      ws = new WebSocket(wsUrl);
+      const targetUrl = useDirect ? directUrl : primaryUrl;
+      ws = new WebSocket(targetUrl);
 
       ws.onopen = () => {
         // Heartbeat ping every 25s
@@ -130,15 +144,19 @@ export const createWebSocketClient = (onMessage) => {
       ws.onclose = () => {
         if (pingTimer) clearInterval(pingTimer);
         if (!isClosedExplicitly) {
+          useDirect = !useDirect;
           reconnectTimer = setTimeout(connect, 3000);
         }
       };
 
       ws.onerror = () => {
-        if (ws) ws.close();
+        if (ws) {
+          try { ws.close(); } catch (_) {}
+        }
       };
     } catch (err) {
       if (!isClosedExplicitly) {
+        useDirect = !useDirect;
         reconnectTimer = setTimeout(connect, 3000);
       }
     }

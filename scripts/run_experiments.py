@@ -136,7 +136,7 @@ def extract_document_pages(file_path: Path) -> list[dict]:
         except Exception as e:
             logger.warning(f"Error extracting PDF {file_path}: {e}")
 
-    elif suffix in [".jpg", ".jpeg", ".png"]:
+    elif suffix in [".jpg", ".jpeg", ".png", ".jfif", ".webp"]:
         try:
             img = Image.open(file_path).convert("RGB")
             stem_words = file_path.stem.replace("_", " ").replace("-", " ").split()
@@ -172,7 +172,7 @@ def load_all_datasets(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> l
         if cname not in CLASS_MAP:
             continue
 
-        files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
+        files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png", ".jfif", ".webp"]]
         for f in files:
             doc_samples = extract_document_pages(f)
             for s in doc_samples:
@@ -195,7 +195,7 @@ def load_all_datasets(primary_dir: Path, auxiliary_dirs: list[Path] = None) -> l
                 # Only supplement classes with < 20 samples in primary dataset
                 current_count = sum(1 for s in all_samples if s["class_name"] == cname)
                 if current_count < 20:
-                    files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png"]]
+                    files = [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in [".pdf", ".jpg", ".jpeg", ".png", ".jfif", ".webp"]]
                     for f in files:
                         doc_samples = extract_document_pages(f)
                         for s in doc_samples:
@@ -574,8 +574,8 @@ def run_experiment(run_id: int, config: dict, train_samples: list, test_samples:
 
 def main():
     parser = argparse.ArgumentParser(description="ARA OCR Multimodal Classifier Fine-Tuning Suite")
-    parser.add_argument("--data_dir", type=str, default="new_training_data", help="Primary dataset directory")
-    parser.add_argument("--auxiliary_dirs", nargs="*", default=["training_data", "data/demo"], help="Auxiliary balance datasets")
+    parser.add_argument("--data_dir", type=str, default="unified_training_data", help="Primary dataset directory")
+    parser.add_argument("--auxiliary_dirs", nargs="*", default=[], help="Auxiliary balance datasets")
     parser.add_argument("--output_dir", type=str, default="models/layoutxlm", help="Final model destination")
     parser.add_argument("--base_model", type=str, default="models/layoutxlm_backup_pre_oos" if Path("models/layoutxlm_backup_pre_oos").exists() else "microsoft/layoutlmv3-base", help="Base model checkpoint to initialize from")
     parser.add_argument("--epochs", type=int, default=6, help="Default epochs for training runs")

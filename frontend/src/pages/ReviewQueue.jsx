@@ -127,7 +127,7 @@ const ReviewQueue = () => {
 
                 <div className="p-3 border-t border-slate-100 bg-slate-50">
                   <button
-                    onClick={() => navigate(`/result/${docId}`)}
+                    onClick={() => navigate(`/result/${docId}`, { state: { from: '/queue' } })}
                     className="w-full flex items-center justify-center space-x-1.5 py-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 hover:bg-slate-100 transition cursor-pointer"
                   >
                     <Eye size={13} />

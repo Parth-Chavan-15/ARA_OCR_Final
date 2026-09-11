@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, FileCheck2, ShieldAlert, Sparkles, FolderCheck, BookOpen } from 'lucide-react';
+import { LayoutDashboard, Users, FileCheck2, ShieldAlert, Sparkles, FolderCheck, BookOpen, Building2 } from 'lucide-react';
 
 const Sidebar = () => {
   const navItems = [
@@ -11,16 +11,22 @@ const Sidebar = () => {
       badge: 'Live',
     },
     {
+      name: 'Institutes & Streams',
+      path: '/institutes',
+      icon: <Building2 size={18} />,
+      badge: 'Hierarchy',
+    },
+    {
       name: 'Candidate Registry',
       path: '/candidates',
       icon: <Users size={18} />,
-      badge: '27 Students',
+      badge: 'Roster',
     },
     {
       name: 'Document Scrutiny',
       path: '/incoming',
       icon: <FileCheck2 size={18} />,
-      badge: 'Multimodal',
+      badge: 'Vault',
     },
     {
       name: 'Review & Audit Queue',
@@ -88,23 +94,31 @@ const Sidebar = () => {
           <div className="space-y-1.5 text-slate-300 text-[10px]">
             <div className="flex justify-between">
               <span className="text-slate-400">Architecture:</span>
-              <span className="font-mono text-amber-300">LayoutLMv3</span>
+              <span className="font-mono text-amber-300 font-bold">LayoutLMv3</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Champion Model:</span>
+              <span className="text-amber-300/90 font-medium">Run 4 (Cosine 8 Ep)</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Test Accuracy:</span>
-              <span className="font-bold text-emerald-400">91.55%</span>
+              <span className="font-bold text-emerald-400">88.27%</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Macro F1 Score:</span>
+              <span className="font-bold text-sky-400">67.75%</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">OOD F1 Score:</span>
-              <span className="font-bold text-sky-400">91.72%</span>
+              <span className="font-bold text-sky-400">84.71%</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Trained Dataset:</span>
-              <span className="font-medium text-slate-200">741 Docs (6 Classes)</span>
+              <span className="font-medium text-slate-200">1,138 Samples (1,067 Docs)</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">OCR Engine:</span>
-              <span className="font-medium text-slate-200">PaddleOCR (GPU)</span>
+              <span className="font-medium text-slate-200">PaddleOCR + EasyOCR (GPU)</span>
             </div>
           </div>
         </div>

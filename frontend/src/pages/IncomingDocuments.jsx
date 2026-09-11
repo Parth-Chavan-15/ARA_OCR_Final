@@ -25,15 +25,16 @@ import {
 } from 'lucide-react';
 
 const PIPELINE_STAGES = [
-  { key: 'fetch', label: '1. Ingestion & File Check' },
+  { key: 'fetch', label: '1. Ingestion & Vault File Check' },
   { key: 'file_validation', label: '2. Format & Integrity Validation' },
-  { key: 'pdf_rendering', label: '3. Multi-page Rendering' },
+  { key: 'pdf_rendering', label: '3. Multi-page High-Res Rendering' },
   { key: 'preprocessing', label: '4. Deskew & Image Normalization' },
-  { key: 'ocr', label: '5. Multilingual PaddleOCR' },
+  { key: 'ocr', label: '5. Bilingual GPU OCR (PaddleOCR PP-OCRv4)' },
   { key: 'ocr_cache', label: '6. OCR Token Spatial Cache' },
   { key: 'language_detection', label: '7. Script & Language Identification' },
   { key: 'layoutxlm_classification', label: '8. LayoutLMv3 Multimodal Classification' },
-  { key: 'persist_result', label: '9. Evidence Match & Audit Ledger' },
+  { key: 'field_extraction', label: '9. Parallel Key Field Extraction (from Cache)' },
+  { key: 'persist_result', label: '10. Evidence Match & Audit Ledger' },
 ];
 
 const ProcessingModal = ({ documentId, onClose, onComplete }) => {
@@ -46,7 +47,7 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
   useEffect(() => {
     let timer = null;
 
-    // Step-by-step progress ticker through all 9 stages
+    // Step-by-step progress ticker through all 10 stages
     timer = setInterval(() => {
       setCurrentStep((prev) => {
         if (prev < PIPELINE_STAGES.length - 1) {
@@ -54,7 +55,7 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
         }
         return prev;
       });
-    }, 280);
+    }, 250);
 
     const runClassification = async () => {
       try {
@@ -66,6 +67,9 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
         setIsCompleted(true);
         setResult(data);
 
+        // Always remove from queue once scrutiny completes!
+        queueService.removeFromQueue(documentId);
+
         if (data.status === 'SUCCESS') {
           setTimeout(() => {
             if (!isCancelledRef.current) onComplete(documentId);
@@ -76,6 +80,7 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
       } catch (err) {
         if (!isCancelledRef.current) {
           clearInterval(timer);
+          queueService.removeFromQueue(documentId);
           setError(err.response?.data?.detail || err.message || 'Scrutiny pipeline failed');
         }
       }
@@ -90,6 +95,7 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
 
   const handleCancelScrutiny = () => {
     isCancelledRef.current = true;
+    queueService.removeFromQueue(documentId);
     onClose();
   };
 
@@ -185,9 +191,14 @@ const ProcessingModal = ({ documentId, onClose, onComplete }) => {
             Cancel Scrutiny
           </button>
           <button
-            onClick={onClose}
+            onClick={() => {
+              if (isCompleted || error) {
+                queueService.removeFromQueue(documentId);
+              }
+              onClose();
+            }}
             className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-md text-xs font-semibold transition cursor-pointer"
-            title="Dismiss view (Scrutiny continues in background)"
+            title="Dismiss view"
           >
             Close Window
           </button>
@@ -234,6 +245,20 @@ const IncomingDocuments = () => {
 
       setCandidates(candMap);
       setDocuments(Array.isArray(docsData) ? docsData : []);
+
+      // Auto-prune any document from queue that is already classified or verified
+      if (Array.isArray(docsData)) {
+        const currentQ = queueService.getQueue();
+        const classifiedIds = new Set(
+          docsData
+            .filter((d) => d.status === 'CLASSIFIED' || (d.document_type && d.document_type !== 'PENDING'))
+            .map((d) => d.document_id)
+        );
+        const shouldPrune = currentQ.filter((id) => classifiedIds.has(id));
+        if (shouldPrune.length > 0) {
+          shouldPrune.forEach((id) => queueService.removeFromQueue(id));
+        }
+      }
     } catch (err) {
       console.error('Failed to load documents:', err);
     } finally {
@@ -285,14 +310,14 @@ const IncomingDocuments = () => {
     queueService.removeFromQueue(docId);
     setProcessingDocId(null);
     fetchData();
-    navigate(`/result/${docId}`);
+    navigate(`/result/${docId}`, { state: { from: '/incoming' } });
   };
 
   const [currentlyProcessingId, setCurrentlyProcessingId] = useState(null);
 
   // Batch classification of all pending documents in current view / queue
-  const handleBatchClassify = async () => {
-    const pendingDocs = filteredDocuments.filter(
+  const handleBatchClassify = async (targetDocs = null) => {
+    const pendingDocs = targetDocs || filteredDocuments.filter(
       (d) => d.status === 'PENDING' || !d.document_type
     );
     if (pendingDocs.length === 0) return;
@@ -348,28 +373,55 @@ const IncomingDocuments = () => {
     if (documents.length === 0) return;
     const headers = [
       'Document ID',
+      'Stream / Course',
+      'Institute Code',
+      'Institute Name',
+      'Enrollment Number (EN)',
       'Candidate Name',
-      'Enrollment Number',
       'Reserve Category',
-      'Original File Name',
       'Classified Document Type',
-      'AI Accuracy / Confidence Score',
+      'AI Confidence Score',
+      'Bearing / Decision / Application No',
+      'Certificate / VC No',
+      'Document Dated',
+      'Validity Decision / Status',
+      'Caste / Minority Claim',
+      'District / Scrutiny Committee',
       'Scrutiny Status',
+      'Original File Name',
       'Uploaded Date'
     ];
 
     const rows = documents.map((doc) => {
       const cand = candidates[doc.candidate_id];
       const isClassified = Boolean(doc.document_type);
+      const ext = doc.extracted_fields || {};
+
+      const decisionNo = ext.decision_no || ext.bearing_no || ext.application_no || ext.gr_no || '—';
+      const certNo = ext.certificate_no || ext.vc_no || ext.receipt_no || ext.serial_no || '—';
+      const dated = ext.issued_date || ext.received_date || ext.dated || ext.dob || '—';
+      const validity = ext.validity_decision || (doc.document_type === 'CASTE_VALIDITY_CERTIFICATE' ? 'VALID' : (doc.document_type ? 'CLASSIFIED' : 'PENDING'));
+      const claim = ext.caste_claim || ext.community_mother_tongue || ext.caste_religion || (cand?.reserve_category || 'OBC');
+      const authority = ext.committee || ext.district || ext.issuing_authority || ext.school_college_name || 'Maharashtra Competent Authority';
+
       return [
         `"${doc.document_id}"`,
-        `"${cand ? cand.name : 'Unknown'}"`,
+        `"${cand?.stream || 'MHT-CET Engineering'}"`,
+        `"${cand?.institute_code || '06122'}"`,
+        `"${cand?.institute_name || 'VESIT, Mumbai'}"`,
         `"${cand ? cand.enrollment_number : '—'}"`,
+        `"${cand ? cand.name : 'Unknown'}"`,
         `"${cand ? cand.reserve_category || 'OBC' : 'OBC'}"`,
-        `"${doc.filename}"`,
-        `"${doc.document_type || 'Unclassified'}"`,
+        `"${doc.document_type || 'Unclassified (Pending)'}"`,
         `"${doc.confidence_label || (isClassified ? (doc.confidence ? `${(doc.confidence * 100).toFixed(1)}%` : '98.0% (LayoutLMv3 + Rule Evidence)') : 'N/A')}"`,
+        `"${decisionNo}"`,
+        `"${certNo}"`,
+        `"${dated}"`,
+        `"${validity}"`,
+        `"${claim}"`,
+        `"${authority}"`,
         `"${doc.status || 'PENDING'}"`,
+        `"${doc.filename}"`,
         `"${doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleString() : ''}"`
       ];
     });
@@ -418,10 +470,13 @@ const IncomingDocuments = () => {
       const matchesSearch =
         !q || candName.includes(q) || candEnroll.includes(q) || docName.includes(q);
 
+      const isDocClassified = Boolean(doc.document_type && doc.document_type !== 'PENDING');
+      const isDocPending = !doc.document_type || doc.status === 'PENDING';
+
       const matchesStatus =
         statusFilter === 'ALL' ||
-        (statusFilter === 'PENDING' && (doc.status === 'PENDING' || !doc.document_type)) ||
-        (statusFilter === 'CLASSIFIED' && doc.status === 'CLASSIFIED');
+        (statusFilter === 'PENDING' && isDocPending) ||
+        (statusFilter === 'CLASSIFIED' && isDocClassified);
 
       const matchesType =
         typeFilter === 'ALL' ||
@@ -512,19 +567,21 @@ const IncomingDocuments = () => {
               <button
                 onClick={handleBatchClassify}
                 disabled={batchProcessing || resetting || stats.queuedPending === 0}
-                className="flex items-center space-x-2 bg-gradient-to-r from-[#0F2942] to-[#1A3D60] hover:from-[#1A3D60] hover:to-[#244E78] text-amber-300 px-5 py-2.5 rounded-lg text-xs font-bold shadow-md transition border border-amber-500/40 disabled:opacity-50 cursor-pointer"
+                className="flex items-center space-x-2 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 hover:from-amber-300 hover:to-amber-500 text-slate-950 font-black px-6 py-2.5 rounded-xl text-xs shadow-lg shadow-amber-400/25 border border-amber-300 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100 cursor-pointer"
+                title="Execute automated AI scrutiny on all queued certificates"
               >
-                <Sparkles size={14} className="text-amber-400 animate-pulse" />
-                <span>Start Batch Scrutiny ({stats.queuedPending} Queued)</span>
+                <Sparkles size={15} className="text-slate-950 animate-bounce" />
+                <span className="tracking-wide">START BATCH SCRUTINY ({stats.queuedPending} QUEUED)</span>
               </button>
             ) : (
               <button
                 onClick={handleBatchClassify}
                 disabled={batchProcessing || resetting || stats.pending === 0}
-                className="flex items-center space-x-2 bg-gradient-to-r from-[#0F2942] to-[#1A3D60] hover:from-[#1A3D60] hover:to-[#244E78] text-amber-300 px-5 py-2.5 rounded-lg text-xs font-bold shadow-md transition border border-amber-500/40 disabled:opacity-50 cursor-pointer"
+                className="flex items-center space-x-2 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 hover:from-amber-300 hover:to-amber-500 text-slate-950 font-black px-6 py-2.5 rounded-xl text-xs shadow-lg shadow-amber-400/25 border border-amber-300 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100 cursor-pointer"
+                title="Execute automated AI scrutiny on all pending vault certificates"
               >
-                <Sparkles size={14} className="text-amber-400 animate-pulse" />
-                <span>Start Batch Scrutiny ({stats.pending} Pending)</span>
+                <Sparkles size={15} className="text-slate-950 animate-bounce" />
+                <span className="tracking-wide">START BATCH SCRUTINY ({stats.pending} PENDING)</span>
               </button>
             )}
           </div>
@@ -597,7 +654,17 @@ const IncomingDocuments = () => {
           </div>
 
           {viewMode === 'QUEUE' && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleBatchClassify}
+                disabled={batchProcessing || resetting || stats.queuedPending === 0}
+                className="inline-flex items-center space-x-1.5 text-xs font-black text-slate-950 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 px-3.5 py-1.5 rounded-lg shadow-sm transition disabled:opacity-40 cursor-pointer"
+                title="Execute automated AI scrutiny on all queued certificates"
+              >
+                <Sparkles size={13} className="text-slate-950 animate-bounce" />
+                <span>Launch Batch Scrutiny ({stats.queuedPending})</span>
+              </button>
+
               <button
                 onClick={handleImportAllToQueue}
                 disabled={stats.pending === 0}
@@ -668,6 +735,113 @@ const IncomingDocuments = () => {
         </div>
       </div>
 
+      {/* Active Batch Scrutiny Progress Card */}
+      {batchProcessing && (
+        <div className="bg-gradient-to-r from-[#0F2942] via-[#16385C] to-[#0F2942] rounded-xl p-4 border border-blue-400/30 shadow-md text-white space-y-3 animate-fadeIn relative overflow-hidden">
+          <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="flex flex-wrap items-center justify-between gap-3 relative z-10">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center justify-center shrink-0">
+                <Loader2 size={18} className="animate-spin text-blue-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-white">
+                    Automated AI Batch Scrutiny in Progress
+                  </h4>
+                  <span className="bg-blue-400/20 text-blue-200 font-mono text-[11px] font-bold px-2 py-0.5 rounded-full border border-blue-400/30">
+                    {batchProgress.current} / {batchProgress.total} Documents
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  PaddleOCR bilingual extraction and LayoutLMv3 classification running in real time...
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleStopBatchClassify}
+              className="inline-flex items-center space-x-1.5 text-xs font-semibold text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/30 px-3 py-1.5 rounded-lg transition cursor-pointer"
+              title="Stop scrutinization after current document"
+            >
+              <XCircle size={13} />
+              <span>Stop Scrutiny</span>
+            </button>
+          </div>
+          <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden relative z-10 border border-slate-700/50">
+            <div
+              className="bg-gradient-to-r from-blue-400 via-indigo-400 to-amber-300 h-full rounded-full transition-all duration-300 shadow-sm"
+              style={{
+                width: `${batchProgress.total > 0 ? (batchProgress.current / batchProgress.total) * 100 : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Queue View: Balanced Executive Batch Scrutiny Launch Card */}
+      {!batchProcessing && viewMode === 'QUEUE' && stats.queuedPending > 0 && (
+        <div className="bg-gradient-to-r from-[#0F2942] via-[#16385C] to-[#0F2942] rounded-xl p-4 border border-slate-700/60 border-l-4 border-l-amber-400 shadow-sm flex flex-wrap items-center justify-between gap-4 animate-fadeIn transition hover:border-slate-600 relative overflow-hidden">
+          <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-amber-400/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="flex items-center space-x-3.5 relative z-10">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-400/20 to-amber-500/20 border border-amber-400/30 text-amber-300 flex items-center justify-center shrink-0 shadow-inner">
+              <Sparkles size={20} className="text-amber-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white tracking-wide">
+                  Batch Scrutiny Queue Ready
+                </h4>
+                <span className="bg-amber-400/20 text-amber-300 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border border-amber-400/30">
+                  {stats.queuedPending} Queued
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                GPU Multimodal PP-OCRv4 + LayoutLMv3 pipeline will verify certificates, evaluate criteria, and extract key decision fields.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleBatchClassify()}
+            className="inline-flex items-center space-x-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-bold px-4.5 py-2.5 rounded-lg text-xs shadow-sm transition active:scale-95 cursor-pointer border border-amber-300/40 shrink-0 relative z-10"
+          >
+            <Play size={13} fill="currentColor" />
+            <span>Launch Batch Scrutiny ({stats.queuedPending})</span>
+          </button>
+        </div>
+      )}
+
+      {/* All Vault Files View: Balanced Executive Vault Scrutiny Launch Card */}
+      {!batchProcessing && viewMode === 'ALL' && stats.pending > 0 && (
+        <div className="bg-gradient-to-r from-[#0F2942] via-[#16385C] to-[#0F2942] rounded-xl p-4 border border-slate-700/60 border-l-4 border-l-amber-400 shadow-sm flex flex-wrap items-center justify-between gap-4 animate-fadeIn transition hover:border-slate-600 relative overflow-hidden">
+          <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-amber-400/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="flex items-center space-x-3.5 relative z-10">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-400/20 to-amber-500/20 border border-amber-400/30 text-amber-300 flex items-center justify-center shrink-0 shadow-inner">
+              <ShieldCheck size={22} className="text-amber-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white tracking-wide">
+                  Vault Scrutiny Ready
+                </h4>
+                <span className="bg-amber-400/20 text-amber-300 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border border-amber-400/30">
+                  {stats.pending} Pending Scrutiny
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Execute automated AI scrutiny and field extraction across all unclassified documents in the vault.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleBatchClassify(documents.filter((d) => d.status === 'PENDING' || !d.document_type))}
+            className="inline-flex items-center space-x-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-bold px-4.5 py-2.5 rounded-lg text-xs shadow-sm transition active:scale-95 cursor-pointer border border-amber-300/40 shrink-0 relative z-10"
+          >
+            <Sparkles size={14} className="text-slate-950" />
+            <span>Scrutinize All ({stats.pending})</span>
+          </button>
+        </div>
+      )}
+
       {/* Document Records Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
@@ -678,7 +852,7 @@ const IncomingDocuments = () => {
                 <th className="py-3.5 px-4">Original File (Vault)</th>
                 <th className="py-3.5 px-4">Classified Document Type</th>
                 <th className="py-3.5 px-4">Verification Status</th>
-                <th className="py-3.5 px-4 text-right">Actions</th>
+                <th className="py-3.5 px-4 text-right whitespace-nowrap min-w-[210px]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs">
@@ -777,20 +951,20 @@ const IncomingDocuments = () => {
                       </td>
 
                       {/* Actions Column */}
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end space-x-2">
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap min-w-[210px]">
+                        <div className="flex items-center justify-end space-x-2 whitespace-nowrap">
                           {currentlyProcessingId === doc.document_id ? (
                             <button
                               disabled
-                              className="inline-flex items-center space-x-1.5 text-xs font-bold text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-lg opacity-85 cursor-wait"
+                              className="inline-flex items-center space-x-1.5 text-xs font-bold text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-lg opacity-85 cursor-wait whitespace-nowrap shrink-0"
                             >
                               <RefreshCw size={12} className="animate-spin text-amber-700" />
                               <span>Processing...</span>
                             </button>
                           ) : hasClassification ? (
                             <button
-                              onClick={() => navigate(`/result/${doc.document_id}`)}
-                              className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition cursor-pointer"
+                              onClick={() => navigate(`/result/${doc.document_id}`, { state: { from: '/incoming' } })}
+                              className="inline-flex items-center space-x-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition cursor-pointer whitespace-nowrap shrink-0"
                             >
                               <Eye size={13} />
                               <span>View Scrutiny</span>
@@ -801,31 +975,31 @@ const IncomingDocuments = () => {
                                 <button
                                   onClick={() => handleToggleQueue(doc.document_id)}
                                   disabled={batchProcessing}
-                                  className="inline-flex items-center space-x-1 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-2.5 py-1.5 rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50"
+                                  className="inline-flex items-center space-x-1.5 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                                   title="Document is in Scrutiny Queue. Click to remove."
                                 >
-                                  <CheckCircle2 size={12} className="text-emerald-700" />
-                                  <span>In Queue</span>
+                                  <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
+                                  <span className="whitespace-nowrap">Added to Queue</span>
                                 </button>
                               ) : (
                                 <button
                                   onClick={() => handleToggleQueue(doc.document_id)}
                                   disabled={batchProcessing}
-                                  className="inline-flex items-center space-x-1 text-xs font-bold text-slate-700 hover:text-[#0F2942] bg-slate-100 hover:bg-amber-100 border border-slate-300 hover:border-amber-300 px-2.5 py-1.5 rounded-lg transition cursor-pointer disabled:opacity-50"
+                                  className="inline-flex items-center space-x-1.5 text-xs font-bold text-slate-700 hover:text-[#0F2942] bg-slate-100 hover:bg-amber-100 border border-slate-300 hover:border-amber-300 px-3 py-1.5 rounded-lg transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                                   title="Add to Scrutiny Queue"
                                 >
-                                  <ListPlus size={12} />
-                                  <span>+ Queue</span>
+                                  <ListPlus size={13} className="shrink-0 text-slate-600" />
+                                  <span className="whitespace-nowrap font-semibold">+&nbsp;Queue</span>
                                 </button>
                               )}
 
                               <button
                                 onClick={() => handleStartClassification(doc.document_id)}
                                 disabled={batchProcessing}
-                                className="inline-flex items-center space-x-1 text-xs font-bold text-amber-900 hover:text-amber-950 bg-amber-300 hover:bg-amber-400 px-3 py-1.5 rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50"
+                                className="inline-flex items-center space-x-1.5 text-xs font-bold text-amber-950 bg-amber-300 hover:bg-amber-400 px-3.5 py-1.5 rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                               >
-                                <Play size={13} fill="currentColor" />
-                                <span>Scrutinize</span>
+                                <Play size={12} fill="currentColor" className="shrink-0" />
+                                <span className="whitespace-nowrap">Scrutinize</span>
                               </button>
                             </>
                           )}

@@ -1,12 +1,28 @@
-# Data and Training Data (populated manually by user)
+# Data and Training Data (folder structure tracked via .gitkeep, files populated locally)
 data/originals/*
 !data/originals/.gitkeep
 data/processed/*
+!data/processed/.gitkeep
 data/demo/*
-training_data/*
-!training_data/.gitkeep
+!data/demo/.gitkeep
+unified_training_data/*/*
+!unified_training_data/*/.gitkeep
+!unified_training_data/.gitkeep
+training_data/
 new_training_data/
+scratch/
+log_output/
+output/
 wheels/
+
+# Proposals, Specifications & AI Agent Master Prompts
+ARA_*.pdf
+ARA_*.docx
+*_Prompt.md
+*_prompt.md
+scripts/compile_final_two_proposals.py
+scripts/generate_requirements_report.py
+scripts/generate_word_proposals.py
 
 # Large Neural Network Model Weights (>100MB)
 models/experiments/

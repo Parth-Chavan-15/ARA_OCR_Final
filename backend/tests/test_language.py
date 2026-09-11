@@ -21,6 +21,17 @@ def test_bilingual_text():
     assert result == "Marathi + English"
 
 
+def test_bilingual_mixed_form_fields():
+    # English form with Marathi candidate name and caste fields
+    texts = [
+        "Government", "of", "Maharashtra", "Certificate", "of", "Validity",
+        "District", "Caste", "Scrutiny", "Committee", "Decision", "Number",
+        "Dated", "Candidate", "नाव", "अरुण", "पवार", "जात", "मराठा"
+    ]
+    result = LanguageService.detect_language(texts)
+    assert result == "Marathi + English"
+
+
 def test_empty_text():
     result = LanguageService.detect_language([])
     assert result == "UNKNOWN"

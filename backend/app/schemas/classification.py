@@ -35,6 +35,7 @@ class ClassificationResultResponse(BaseModel):
     rule_applied: Optional[str] = None
     confidence_label: Optional[str] = None
     evidence: dict[str, Any]
+    extracted_fields: Optional[dict[str, Any]] = None
     model_version: str
     created_at: datetime
 
@@ -70,6 +71,7 @@ class ClassifyResponse(BaseModel):
     language: Optional[str] = None
     ocr_confidence: Optional[float] = None
     evidence: Optional[dict[str, Any]] = None
+    extracted_fields: Optional[dict[str, Any]] = None
     model_version: Optional[str] = None
     error: Optional[str] = None
     model_config = {"protected_namespaces": ()}
